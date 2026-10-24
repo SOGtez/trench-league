@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+@theme {
+  /* Surfaces */
+  --color-bg: #0b0d10;
+  --color-header: #0f1215;
+  --color-card: #15181d;
+  --color-line: #23272e;
+  --color-line-strong: #2e333b;
+  --color-active: #2a2f37;
+  --color-hover: #1c2026;
+
+  /* Text */
+  --color-ink: #f2f4f7;
+  --color-muted: #9aa3af;
+  --color-soft: #c9cfd8;
+
+  /* Accents */
+  --color-brand: #5b8cff;
+  --color-link: #7fa6ff;
+  --color-up: #3ddc97;
+  --color-down: #ff8a4c;
+  --color-gold: #ffc857;
+
+  /* States */
+  --color-you: #172033;
+
+  /* Type */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular,
+    Menlo, monospace;
+
+  /* Radii */
+  --radius-btn: 12px;
+  --radius-card: 18px;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: rgb(91 140 255 / 0.3);
+    color: #fff;
+  }
+
+  /* Keep focus visible for keyboard users without the browser's default ring. */
+  :focus-visible {
+    outline: 2px solid rgb(91 140 255 / 0.7);
+    outline-offset: 2px;
+  }
+
+  /* Compact scrollbars inside panels and sideways-scrolling tables. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2e333b transparent;
+  }
+
+  *::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: #2e333b;
+    border-radius: 999px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background-color: transparent;
+  }
+}
+
+/* Numeric text: mono, fixed-width digits so prices don't jitter. */
+@utility num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
