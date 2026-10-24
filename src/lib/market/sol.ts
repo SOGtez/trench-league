@@ -1,0 +1,31 @@
+import { SOL_MINT } from "./types";
+
+const JUPITER_PRICE_URL = `https://api.jup.ag/price/v3?ids=${SOL_MINT}`;
+const TIMEOUT_MS = 6_000;
+
+type JupiterPrice = { usdPrice?: number };
+
+/**
+ * Live SOL/USD. Jupiter's price API is keyless at ~0.5 req/s, which is plenty
+ * given every caller is cached; when it fails the GeckoTerminal quote price is
+ * used instead (see `solPriceFromPools`).
+ */
+export async function fetchSolPriceUsd(): Promise<number | null> {
+  try {
+    const response = await fetch(JUPITER_PRICE_URL, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      next: { revalidate: 30 },
+    });
+
+    if (!response.ok) return null;
+
+    const body = (await response.json()) as Record<string, JupiterPrice>;
+    const price = body?.[SOL_MINT]?.usdPrice;
+    return typeof price === "number" && Number.isFinite(price) && price > 0
+      ? price
+      : null;
+  } catch {
+    return null;
+  }
+}

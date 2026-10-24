@@ -5,16 +5,18 @@ No wallet, no deposits, no real money — prizes are points, badges and titles.
 
 > Real prices. Fake SOL. Prove you can survive the trenches.
 
-This repo is being built in phases. **Phase 1 (setup, auth, routing, design
-system) is done**; the trading engine, live market data, leagues and calls land
-in later phases. See [Build status](#build-status).
+This repo is being built in phases. **Phases 1–2 are done** — setup, auth,
+routing, design system, and the live market data layer behind Discover. The
+trading engine, leagues and calls land in later phases. See
+[Build status](#build-status).
 
 ## Stack
 
 - Next.js 16 (App Router, TypeScript, React 19)
 - Tailwind CSS v4 with the design tokens in `src/app/globals.css`
 - Supabase (Postgres, Auth, Realtime) via `@supabase/ssr`
-- TradingView Lightweight Charts + Solana market data (added in phase 2/3)
+- Live market data from GeckoTerminal + Jupiter, both keyless
+- TradingView Lightweight Charts (phase 3)
 - Vercel + Vercel Cron for scheduled jobs (phase 4/5)
 
 ## Setup
@@ -45,15 +47,17 @@ cp .env.example .env.local
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | yes | Supabase anon (public) key — safe in the browser, RLS protects data |
 | `SUPABASE_SERVICE_ROLE_KEY` | phase 3+ | Server-only. Trading engine, cron, league settlement. **Never**  prefix with `NEXT_PUBLIC_` |
 | `NEXT_PUBLIC_APP_URL` | recommended | Public origin used for auth redirects |
-| `BIRDEYE_API_KEY` | phase 2 | Token overview, OHLCV candles, trending, holder distribution |
-| `HELIUS_API_KEY` | phase 2 | Holder lists (DAS), metadata, RPC |
-| `JUPITER_API_KEY` | phase 3 | Quotes for graduated coins (price impact) + prices |
-| `PUMPPORTAL_API_KEY` | phase 2 | Live launch stream (trade streams are metered) |
+| `BIRDEYE_API_KEY` | optional | Candles, holder distribution (phase 3 chart). Free tier is tight — cache everything |
+| `HELIUS_API_KEY` | optional | Holder lists (DAS), metadata, RPC |
+| `JUPITER_API_KEY` | optional | Raises the keyless `api.jup.ag` rate limit from 0.5 to 1 req/s |
+| `PUMPPORTAL_API_KEY` | optional | Real-time trade stream; the free launch stream needs no key |
 | `SWAP_FEE_BPS` | phase 3 | Paper swap fee, `100` = 1% |
 | `PRIORITY_FEE_SOL` | phase 3 | Fixed priority fee per fill, default `0.001` |
 
-Until the Supabase variables are set the app still boots and shows a "Supabase
-not connected" banner instead of failing.
+Only the Supabase pair is required. **Discover needs no market-data keys** — it
+reads GeckoTerminal's public API (30 requests/min → cached server-side for 30s)
+and Jupiter's keyless price endpoint. Until the Supabase variables are set the
+app still boots and shows a "Supabase not connected" banner instead of failing.
 
 ### 4. Auth providers
 
@@ -85,8 +89,16 @@ src/
     welcome/username/        # post-signup username step
     (app)/                   # signed-in shell (header + auth guard)
       discover/ portfolio/ leagues/ calls/ profile/ coin/[mint]/
-  components/                # UI kit, header, landing, dashboard
+  app/api/market/discover/   # GET snapshot the Discover board polls every 15s
+  components/                # UI kit, header, landing, dashboard, discover board
   lib/
+    market/                  # market data layer
+      types.ts               # MarketToken / DiscoverSnapshot
+      geckoterminal.ts       # pool feed client + normaliser
+      sol.ts                 # SOL/USD via Jupiter
+      curve.ts               # pump.fun bonding-curve progress
+      discover.ts            # composes the three Discover columns
+      cache.ts               # TTL memo + request coalescing (rate limits)
     supabase/{client,server,proxy,env}.ts
     auth.ts                  # server-side auth context (user + profile + practice account)
     utils.ts                 # formatters
@@ -99,13 +111,33 @@ supabase/migrations/0001_init.sql
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1 | Setup, Supabase, auth, username step, header, routing, design tokens | done |
-| 2 | Market data routes/cache, Discover live columns | next |
-| 3 | Trading engine, coin page, chart, portfolio | pending |
+| 2 | Market data routes/cache, Discover live columns | done |
+| 3 | Trading engine, coin page, chart, portfolio | next |
 | 4 | Leagues, accounts, leaderboards, cron | pending |
 | 5 | Calls, scoring, streaks, badges, profile | pending |
 | 6 | Polish, mobile pass, landing, analytics | pending |
 
 ## Market data notes (checked before building)
+
+**What phase 2 actually uses** (verified live on 2026-10-24, SOL ≈ $101.5):
+
+- **GeckoTerminal** (`api.geckoterminal.com/api/v2`) — keyless, 30 req/min.
+  `/networks/solana/new_pools` gives newest-first pools with price, FDV, volume
+  and 5m/1h/24h transaction counts; `/networks/solana/dexes/pump-fun/pools`
+  sorted by volume provides the bonding-curve candidates for "about to
+  graduate"; `/networks/solana/trending_pools` backs the trending column. The
+  market layer fetches six pages per refresh, memoised for 30s, so upstream sees
+  ~12 requests/min at worst and the CDN absorbs every other tab.
+- **Jupiter** (`api.jup.ag/price/v3`) — keyless SOL/USD, cached 30s. If it
+  fails, the SOL price is derived from any SOL-quoted GeckoTerminal pool.
+- **Bonding-curve progress is an estimate**: `FDV / (411 × SOL price)`. Checked
+  against live data — coins still on the `pump-fun` dex cap out at $41.1–41.6K
+  with SOL at $101.5, and every pool above that has already moved to `pumpswap`.
+  Phase 3 reads real curve reserves before quoting a fill.
+- **pump.fun's own frontend API is not usable server-side** — both
+  `frontend-api.pump.fun` and `frontend-api-v3.pump.fun` answer `403` with a
+  Cloudflare challenge. The plan below predates that; GeckoTerminal replaces it.
+
 
 - **PumpPortal** — the new-token stream is still free; since May 2026 the
   per-mint **trade** stream needs an API key and is metered (0.01 SOL per 10k

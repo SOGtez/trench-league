@@ -36,6 +36,41 @@ export function shortAddress(address: string, chars = 4): string {
   return `${address.slice(0, chars)}…${address.slice(-chars)}`;
 }
 
+/** Seconds since an ISO timestamp, floored at 0. */
+export function ageSeconds(
+  iso: string | null | undefined,
+  nowMs = Date.now(),
+): number {
+  if (!iso) return 0;
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return 0;
+  return Math.max(0, Math.round((nowMs - then) / 1000));
+}
+
+/** Trading-terminal age: "42s", "7m", "3h 12m", "4d". */
+export function formatAge(
+  iso: string | null | undefined,
+  nowMs = Date.now(),
+): string {
+  if (!iso) return "—";
+  const seconds = ageSeconds(iso, nowMs);
+
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3_600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86_400) {
+    const hours = Math.floor(seconds / 3_600);
+    const minutes = Math.floor((seconds % 3_600) / 60);
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+
+  const days = Math.floor(seconds / 86_400);
+  if (days < 30) {
+    const hours = Math.floor((seconds % 86_400) / 3_600);
+    return hours > 0 && days < 7 ? `${days}d ${hours}h` : `${days}d`;
+  }
+  return `${Math.floor(days / 30)}mo`;
+}
+
 export function initials(name: string | null | undefined): string {
   const clean = (name ?? "?").replace(/[^a-zA-Z0-9]/g, "");
   return (clean.slice(0, 2) || "?").toUpperCase();
