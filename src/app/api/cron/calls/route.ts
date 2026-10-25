@@ -66,3 +66,8 @@ export async function GET(request: Request) {
     { headers: { "Cache-Control": "no-store" } },
   );
 }
+
+/** Vercel Cron sends GET; the database job posts. Same handler for both. */
+export async function POST(request: Request) {
+  return GET(request);
+}
