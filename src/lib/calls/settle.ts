@@ -51,17 +51,22 @@ async function priceAt(
     const candles = await fetchCandles(pool, "minute", 1, CANDLE_LIMIT);
 
     if (candles && candles.length > 0) {
-      let covering = candles[0];
-      for (const candle of candles) {
-        // Candle timestamps are the candle's opening second.
-        if (candle.time * 1000 <= atMs) covering = candle;
-      }
-      if (covering.close > 0) return covering.close;
+      const at = Math.floor(atMs / 1000);
+
+      // Only the candle that actually covers the resolve minute is the close we
+      // want. The window is the last `CANDLE_LIMIT` minutes, so a settlement
+      // more than an hour late finds nothing — and another minute's price is
+      // not a substitute for the one the call was scored on.
+      const covering = candles.find(
+        (candle) => candle.time <= at && at < candle.time + 60,
+      );
+      if (covering && covering.close > 0) return covering.close;
     }
   }
 
-  // No pool or no candles: the live price is close enough, and a wrong-by-a-
-  // -minute price still resolves to the same side in almost every case.
+  // No pool, no candle for that minute, or a settlement too late to reach it:
+  // the live price is close enough, and a wrong-by-a-minute price still
+  // resolves to the same side in almost every case.
   try {
     const live = await getLivePrices([mint]);
     return live[mint]?.priceUsd ?? null;
