@@ -56,6 +56,53 @@ export async function fetchPools(path: string): Promise<GtPool[] | null> {
   }
 }
 
+/** Candles for a pool, oldest first. GeckoTerminal sends them newest first. */
+export type Candle = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
+
+export async function fetchCandles(
+  poolAddress: string,
+  timeframe: "minute" | "hour" | "day",
+  aggregate: number,
+  limit = 150,
+): Promise<Candle[] | null> {
+  try {
+    const response = await fetch(
+      `${BASE_URL}/networks/solana/pools/${encodeURIComponent(poolAddress)}/ohlcv/${timeframe}?aggregate=${aggregate}&limit=${limit}&currency=usd`,
+      {
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        next: { revalidate: 15 },
+      },
+    );
+
+    if (!response.ok) return null;
+
+    const body = (await response.json()) as {
+      data?: { attributes?: { ohlcv_list?: number[][] } };
+    };
+    const list = body.data?.attributes?.ohlcv_list;
+    if (!Array.isArray(list)) return null;
+
+    return list
+      .map((row): Candle | null => {
+        const [time, open, high, low, close, volume] = row;
+        if (![time, open, high, low, close].every(Number.isFinite)) return null;
+        return { time, open, high, low, close, volume: volume ?? 0 };
+      })
+      .filter((candle): candle is Candle => candle !== null)
+      .sort((a, b) => a.time - b.time);
+  } catch {
+    return null;
+  }
+}
+
 function relationshipId(
   relationship: { data?: { id?: string } } | undefined,
 ): string | null {

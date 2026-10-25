@@ -5,9 +5,9 @@ No wallet, no deposits, no real money — prizes are points, badges and titles.
 
 > Real prices. Fake SOL. Prove you can survive the trenches.
 
-This repo is being built in phases. **Phases 1–2 are done** — setup, auth,
-routing, design system, and the live market data layer behind Discover. The
-trading engine, leagues and calls land in later phases. See
+This repo is being built in phases. **Phases 1–3 are done** — setup, auth,
+routing, the live market data layer, and a working paper trading engine with
+coin pages, charts and a portfolio. Leagues and calls land in later phases. See
 [Build status](#build-status).
 
 ## Stack
@@ -16,7 +16,7 @@ trading engine, leagues and calls land in later phases. See
 - Tailwind CSS v4 with the design tokens in `src/app/globals.css`
 - Supabase (Postgres, Auth, Realtime) via `@supabase/ssr`
 - Live market data from GeckoTerminal + Jupiter, both keyless
-- TradingView Lightweight Charts (phase 3)
+- TradingView Lightweight Charts for the coin chart
 - Vercel + Vercel Cron for scheduled jobs (phase 4/5)
 
 ## Setup
@@ -30,10 +30,14 @@ npm install
 ### 2. Create the Supabase project
 
 1. Create a project at [supabase.com](https://supabase.com).
-2. Open **SQL Editor** and run [supabase/migrations/0001_init.sql](supabase/migrations/0001_init.sql).
-   It creates every table, index, RLS policy and the signup trigger that gives
-   each new user a profile plus a practice account with **10 paper SOL**.
-3. Copy the project URL and the **anon** key from **Project Settings → API**.
+2. Open **SQL Editor** and run, in order:
+   - [0001_init.sql](supabase/migrations/0001_init.sql) — every table, index,
+     RLS policy and the signup trigger that gives each new user a profile plus a
+     practice account with **10 paper SOL**.
+   - [0002_trading.sql](supabase/migrations/0002_trading.sql) — the
+     `execute_paper_trade` function, the only path that moves balances.
+3. Copy the project URL, the **anon** key and the **service_role** key from
+   **Project Settings → API**.
 
 ### 3. Environment variables
 
@@ -45,14 +49,14 @@ cp .env.example .env.local
 | --- | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | yes | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | yes | Supabase anon (public) key — safe in the browser, RLS protects data |
-| `SUPABASE_SERVICE_ROLE_KEY` | phase 3+ | Server-only. Trading engine, cron, league settlement. **Never**  prefix with `NEXT_PUBLIC_` |
+| `SUPABASE_SERVICE_ROLE_KEY` | yes (trading) | Server-only. Fills, cron, league settlement. **Never** prefix with `NEXT_PUBLIC_` |
 | `NEXT_PUBLIC_APP_URL` | recommended | Public origin used for auth redirects |
 | `BIRDEYE_API_KEY` | optional | Candles, holder distribution (phase 3 chart). Free tier is tight — cache everything |
 | `HELIUS_API_KEY` | optional | Holder lists (DAS), metadata, RPC |
 | `JUPITER_API_KEY` | optional | Raises the keyless `api.jup.ag` rate limit from 0.5 to 1 req/s |
 | `PUMPPORTAL_API_KEY` | optional | Real-time trade stream; the free launch stream needs no key |
-| `SWAP_FEE_BPS` | phase 3 | Paper swap fee, `100` = 1% |
-| `PRIORITY_FEE_SOL` | phase 3 | Fixed priority fee per fill, default `0.001` |
+| `SWAP_FEE_BPS` | optional | Paper swap fee, `100` = 1% (default) |
+| `PRIORITY_FEE_SOL` | optional | Fixed priority fee per fill, default `0.001` SOL |
 
 Only the Supabase pair is required. **Discover needs no market-data keys** — it
 reads GeckoTerminal's public API (30 requests/min → cached server-side for 30s)
@@ -90,20 +94,28 @@ src/
     (app)/                   # signed-in shell (header + auth guard)
       discover/ portfolio/ leagues/ calls/ profile/ coin/[mint]/
   app/api/market/discover/   # GET snapshot the Discover board polls every 15s
-  components/                # UI kit, header, landing, dashboard, discover board
+  app/api/market/candles/    # OHLCV for the coin chart
+  app/api/trade/quote/       # live fill preview (same pricing as the fill)
+  components/                # UI kit, header, landing, dashboard, discover, coin
+    discover/                # board, rows, avatars
+    coin/                    # trade panel, candlestick chart
   lib/
     market/                  # market data layer
       types.ts               # MarketToken / DiscoverSnapshot
-      geckoterminal.ts       # pool feed client + normaliser
+      geckoterminal.ts       # pool feed client + normaliser (+ OHLCV)
       sol.ts                 # SOL/USD via Jupiter
-      curve.ts               # pump.fun bonding-curve progress
+      curve.ts               # pump.fun bonding-curve constants
       discover.ts            # composes the three Discover columns
+      token.ts               # single-mint snapshot (GT, Dexscreener fallback)
+      prices.ts              # batched prices for portfolio valuation
       cache.ts               # TTL memo + request coalescing (rate limits)
-    supabase/{client,server,proxy,env}.ts
+    trade/quote.ts           # constant-product pricing, fees, impact
+    supabase/{client,server,proxy,env,admin}.ts
     auth.ts                  # server-side auth context (user + profile + practice account)
     utils.ts                 # formatters
   proxy.ts                   # Next 16 proxy (= middleware): session refresh + route guards
 supabase/migrations/0001_init.sql
+supabase/migrations/0002_trading.sql
 ```
 
 ## Build status
@@ -112,10 +124,32 @@ supabase/migrations/0001_init.sql
 | --- | --- | --- |
 | 1 | Setup, Supabase, auth, username step, header, routing, design tokens | done |
 | 2 | Market data routes/cache, Discover live columns | done |
-| 3 | Trading engine, coin page, chart, portfolio | next |
-| 4 | Leagues, accounts, leaderboards, cron | pending |
+| 3 | Trading engine, coin page, chart, portfolio | done |
+| 4 | Leagues, accounts, leaderboards, cron | next |
 | 5 | Calls, scoring, streaks, badges, profile | pending |
 | 6 | Polish, mobile pass, landing, analytics | pending |
+
+## Paper trading engine
+
+Fills are priced off the live market with a constant-product model, so size
+moves the price:
+
+- **On the curve** (`pump-fun`): reserves are recovered from the live price and
+the curve invariant `k = 30 SOL × 1.073B tokens`, which reproduces the real
+depth of a bonding curve — a 5 SOL buy on a fresh launch is a huge move, the
+same buy at 99% barely registers.
+- **Graduated** (`pumpswap`, raydium, meteora…): reserves come from the pool's
+live liquidity, with an FDV-based fallback when the feed reports none.
+
+Every fill charges `SWAP_FEE_BPS` (1% by default) plus `PRIORITY_FEE_SOL`, and
+is rejected when the price impact would exceed 35% — that is the "try a smaller
+amount" error.
+
+Writes are atomic: the app decides the price, then
+`public.execute_paper_trade()` (SECURITY DEFINER, execute granted to
+`service_role` only) locks the account row, checks funds, writes the trade and
+updates the position in one transaction. The browser can never call it directly,
+so a fill or a price cannot be forged from devtools.
 
 ## Market data notes (checked before building)
 
@@ -133,7 +167,8 @@ supabase/migrations/0001_init.sql
 - **Bonding-curve progress is an estimate**: `FDV / (411 × SOL price)`. Checked
   against live data — coins still on the `pump-fun` dex cap out at $41.1–41.6K
   with SOL at $101.5, and every pool above that has already moved to `pumpswap`.
-  Phase 3 reads real curve reserves before quoting a fill.
+  The trading engine derives curve reserves from this same price and the curve
+  invariant, so fills respect real depth without a second data source.
 - **pump.fun's own frontend API is not usable server-side** — both
   `frontend-api.pump.fun` and `frontend-api-v3.pump.fun` answer `403` with a
   Cloudflare challenge. The plan below predates that; GeckoTerminal replaces it.

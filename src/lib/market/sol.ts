@@ -1,3 +1,4 @@
+import { memoize } from "./cache";
 import { SOL_MINT } from "./types";
 
 const JUPITER_PRICE_URL = `https://api.jup.ag/price/v3?ids=${SOL_MINT}`;
@@ -10,6 +11,11 @@ type JupiterPrice = { usdPrice?: number };
  * given every caller is cached; when it fails the GeckoTerminal quote price is
  * used instead (see `solPriceFromPools`).
  */
+/** Cached SOL price for page renders that just need a USD conversion. */
+export function getSolPriceUsd(): Promise<number | null> {
+  return memoize("sol-price", 20_000, fetchSolPriceUsd, (price) => price !== null);
+}
+
 export async function fetchSolPriceUsd(): Promise<number | null> {
   try {
     const response = await fetch(JUPITER_PRICE_URL, {

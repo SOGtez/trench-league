@@ -30,6 +30,33 @@ export function formatCompactUsd(value: number | null | undefined): string {
   }).format(n)}`;
 }
 
+/** Token quantities: 1.24M, 850.2K, 12.5. */
+export function formatTokenAmount(value: number | null | undefined): string {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n) || n === 0) return "0";
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
+/** Memecoin prices need significant digits, not fixed decimals. */
+export function formatUsdPrice(value: number | null | undefined): string {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  return `$${n.toLocaleString("en-US", { maximumSignificantDigits: 4 })}`;
+}
+
+/** SOL amounts with four decimals — paper balances move in small steps. */
+export function formatSolAmount(value: number | null | undefined): string {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n)) return "0.0000";
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  });
+}
+
 /** "AbCd…xYz9" — Solana addresses are too long for table cells. */
 export function shortAddress(address: string, chars = 4): string {
   if (address.length <= chars * 2 + 1) return address;

@@ -15,6 +15,14 @@
  */
 export const PUMP_CURVE_GRADUATION_FDV_PER_SOL = 411;
 
+/**
+ * Curve invariant: 30 virtual SOL against 1.073B virtual tokens at launch.
+ * price (SOL/token) = virtualSol / virtualTokens and sol × tokens stays at k,
+ * so both reserves can be recovered from a live price — that is what the paper
+ * trading engine prices fills against.
+ */
+export const PUMP_CURVE_K = 30 * 1_073_000_000;
+
 export function graduationFdvUsd(solPriceUsd: number | null): number | null {
   if (!solPriceUsd || solPriceUsd <= 0) return null;
   return PUMP_CURVE_GRADUATION_FDV_PER_SOL * solPriceUsd;
