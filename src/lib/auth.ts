@@ -13,6 +13,7 @@ export type Profile = {
   username: string | null;
   avatar_url: string | null;
   created_at: string;
+  streak_current: number;
 };
 
 export type PracticeAccount = {
@@ -49,7 +50,7 @@ export async function getAuthContext(): Promise<AuthContext | null> {
   const [profileResult, accounts] = await Promise.all([
     supabase
       .from("profiles")
-      .select("id, username, avatar_url, created_at")
+      .select("id, username, avatar_url, created_at, streak_current")
       .eq("id", user.id)
       .maybeSingle<Profile>(),
     listAccounts(user.id),
