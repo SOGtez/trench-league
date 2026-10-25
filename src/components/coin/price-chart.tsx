@@ -100,8 +100,10 @@ export function PriceChart({ mint }: { mint: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    let timer: number | undefined;
+    let retryMs = 5_000;
 
-    const load = async () => {
+    const load = async (): Promise<boolean> => {
       try {
         const response = await fetch(
           `/api/market/candles?mint=${encodeURIComponent(mint)}&tf=${timeframe}`,
@@ -110,11 +112,11 @@ export function PriceChart({ mint }: { mint: string }) {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const body = (await response.json()) as { candles: Candle[] };
-        if (cancelled || !seriesRef.current || !chartRef.current) return;
+        if (cancelled || !seriesRef.current || !chartRef.current) return true;
 
         if (!body.candles?.length) {
           setStatus("empty");
-          return;
+          return true;
         }
 
         seriesRef.current.applyOptions({
@@ -137,17 +139,29 @@ export function PriceChart({ mint }: { mint: string }) {
         }
 
         setStatus("ready");
+        return true;
       } catch {
         if (!cancelled) setStatus((current) => (current === "ready" ? "ready" : "error"));
+        return false;
       }
     };
 
-    void load();
-    const timer = window.setInterval(load, 20_000);
+    // The candle feed rate limits, and those responses clear within seconds.
+    // Retrying quickly (with a short backoff) fills the chart instead of
+    // leaving it blank until the next full poll.
+    const schedule = async () => {
+      const ok = await load();
+      if (cancelled) return;
+      if (ok) retryMs = 5_000;
+      timer = window.setTimeout(schedule, ok ? 20_000 : retryMs);
+      if (!ok) retryMs = Math.min(retryMs * 2, 30_000);
+    };
+
+    void schedule();
 
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      if (timer) window.clearTimeout(timer);
     };
   }, [mint, timeframe]);
 
@@ -180,8 +194,10 @@ export function PriceChart({ mint }: { mint: string }) {
         </span>
       </div>
 
-      <div className="relative flex-1">
-        <div ref={containerRef} className="h-[320px] w-full sm:h-[380px]" />
+      {/* Grows to fill the card so a tall trade panel does not leave a dead
+          band under the chart; autoSize redraws on every resize. */}
+      <div className="relative min-h-[320px] flex-1 sm:min-h-[380px]">
+        <div ref={containerRef} className="absolute inset-0" />
         {status !== "ready" ? (
           <div className="pointer-events-none absolute inset-0 grid place-items-center">
             <p className="max-w-[92%] rounded-[14px] border border-line bg-card/90 px-3 py-1.5 text-center text-[12px] font-semibold text-muted">

@@ -21,20 +21,29 @@ export async function GET(request: Request) {
   }
 
   const spec = TIMEFRAMES[key] ?? TIMEFRAMES["1m"];
-  const snapshot = await getTokenSnapshot(mint);
 
-  if (!snapshot) {
+  // A coin's pool does not move, but resolving it costs a GeckoTerminal call.
+  // Caching the pool far longer than the snapshot keeps a 30s chart poll from
+  // spending the whole rate-limit budget on lookups.
+  const pool = await memoize(`pool:${mint}`, 5 * 60_000, async () => {
+    const snapshot = await getTokenSnapshot(mint);
+    return snapshot
+      ? { address: snapshot.token.poolAddress, dex: snapshot.token.dex }
+      : null;
+  });
+
+  if (!pool) {
     return Response.json({ error: "Unknown coin." }, { status: 404 });
   }
 
   // Throwing lets the memo serve the last good candle set through a rate-limit
   // blip instead of blanking a chart that was already drawn.
   const candles = await memoize(
-    `candles:${snapshot.token.poolAddress}:${key}`,
-    20_000,
+    `candles:${pool.address}:${key}`,
+    30_000,
     async () => {
       const data = await fetchCandles(
-        snapshot.token.poolAddress,
+        pool.address,
         spec.timeframe,
         spec.aggregate,
         150,
@@ -52,7 +61,7 @@ export async function GET(request: Request) {
   }
 
   return Response.json(
-    { candles, dex: snapshot.token.dex },
+    { candles, dex: pool.dex },
     {
       headers: {
         "Cache-Control": "public, s-maxage=15, stale-while-revalidate=30",

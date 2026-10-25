@@ -7,6 +7,9 @@ type Entry<T> = {
 const store = new Map<string, Entry<unknown>>();
 const inflight = new Map<string, Promise<unknown>>();
 
+/** How long a good value may keep being served after rebuilds go unhealthy. */
+const STALE_GRACE_MS = 5 * 60_000;
+
 /**
  * Tiny per-instance TTL cache with request coalescing.
  *
@@ -34,6 +37,20 @@ export function memoize<T>(
   const promise = build()
     .then((value) => {
       const healthy = isHealthy(value);
+      const previous = store.get(key) as Entry<T> | undefined;
+
+      // A degraded rebuild (GeckoTerminal 429, upstream outage) must not wipe
+      // data we already had. Keep serving the last healthy value for a short
+      // grace window instead of blanking a board that was populated seconds
+      // ago, then accept the degraded value so the UI can report it as stale.
+      if (
+        !healthy &&
+        previous?.healthy &&
+        Date.now() - previous.at < STALE_GRACE_MS
+      ) {
+        return previous.value;
+      }
+
       store.set(key, {
         at: healthy ? Date.now() : Date.now() - ttlMs + 5_000,
         value,
