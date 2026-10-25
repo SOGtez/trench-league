@@ -8,6 +8,7 @@ import { FormError } from "@/components/auth/text-field";
 import { AccountSwitcher } from "@/components/league/account-switcher";
 import { PaperLabel } from "@/components/paper-label";
 import { Button } from "@/components/ui/button";
+import { trackEvent } from "@/lib/analytics";
 import type { AccountSummary } from "@/lib/leagues/active-account";
 import type { TradeQuote, TradeSide } from "@/lib/trade/quote";
 import {
@@ -64,12 +65,13 @@ export function TradePanel({
   useEffect(() => {
     if (!state.filled || refreshedFor.current === state.filled) return;
     refreshedFor.current = state.filled;
+    trackEvent("trade_filled", { side, mint });
     setBuyInput("");
     setSellInput("");
     setQuote(null);
     setQuoteError(null);
     router.refresh();
-  }, [state.filled, router]);
+  }, [state.filled, router, side, mint]);
 
   const updateAmount = (value: string) => {
     if (side === "buy") setBuyInput(value);

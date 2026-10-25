@@ -15,6 +15,12 @@ import { ageSeconds, cn, formatAge } from "@/lib/utils";
 
 /** Snapshot rebuilds cap how fast data can change, so polling faster is waste. */
 const POLL_MS = 7_000;
+/** Arrivals are revealed one coin at a time, this far apart. */
+const REVEAL_MS = 180;
+/** A refresh that brings more than this many coins lands the rest at once. */
+const MAX_QUEUE = 8;
+/** How long an arrived coin keeps its glow. Matches the `row-arrive` keyframes. */
+const FLASH_MS = 1_800;
 const MINT_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 type FilterId = "young" | "mcap" | "volume" | "curve";
@@ -97,8 +103,11 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
   const [query, setQuery] = useState("");
   const [activeFilters, setActiveFilters] = useState<FilterId[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.parse(initial.generatedAt));
-  // Coins that appeared in the latest refresh, so arrivals are visible.
-  const [arrived, setArrived] = useState<Set<string>>(() => new Set());
+  // Coins that arrived in the latest refresh but are not on screen yet: they are
+  // released one at a time so the board fills coin by coin, not in a batch.
+  const [queue, setQueue] = useState<string[]>([]);
+  // Coins currently glowing, and when they landed, so the flash can expire.
+  const [arrived, setArrived] = useState<Map<string, number>>(() => new Map());
   const known = useRef(mintsOf(initial));
 
   // Poll in the background, pausing while the tab is hidden.
@@ -126,11 +135,15 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
         );
 
         const fresh = mintsOf(next);
-        const newcomers = new Set(
-          [...fresh].filter((mint) => !known.current.has(mint)),
-        );
+        const newcomers = [...fresh].filter((mint) => !known.current.has(mint));
         known.current = fresh;
-        setArrived(newcomers);
+        if (newcomers.length > 0) {
+          // Anything past the cap is dropped from the queue, which shows it
+          // straight away — a long trickle is worse than one quick batch.
+          setQueue((current) =>
+            [...current, ...newcomers].slice(0, MAX_QUEUE),
+          );
+        }
         setStatus("live");
       } catch {
         if (!cancelled) setStatus("reconnecting");
@@ -163,6 +176,34 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
     const id = window.setInterval(() => setNowMs(Date.now()), 1_000);
     return () => window.clearInterval(id);
   }, []);
+
+  // Release the queue one coin at a time — the reveal *is* the animation.
+  useEffect(() => {
+    if (queue.length === 0) return;
+
+    const reduced = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    const mint = queue[0];
+
+    const id = window.setTimeout(
+      () => {
+        setQueue((current) => current.slice(1));
+        setArrived((current) => {
+          const next = new Map(current);
+          const at = Date.now();
+          for (const [key, landed] of next) {
+            if (at - landed > FLASH_MS) next.delete(key);
+          }
+          next.set(mint, at);
+          return next;
+        });
+      },
+      reduced ? 0 : REVEAL_MS,
+    );
+
+    return () => window.clearTimeout(id);
+  }, [queue]);
 
   const trimmedQuery = query.trim();
   const isMintQuery = MINT_PATTERN.test(trimmedQuery);
@@ -197,6 +238,9 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
         : [...current, id],
     );
   };
+
+  // Coins waiting their turn: they stay off the board until released.
+  const queued = useMemo(() => new Set(queue), [queue]);
 
   const total = visible.launches.length + visible.graduating.length + visible.trending.length;
   const updated = formatAge(snapshot.generatedAt, nowMs);
@@ -293,7 +337,8 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
 
       <div className="grid gap-4 lg:grid-cols-3">
         {COLUMNS.map((column) => {
-          const rows = visible[column.key];
+          const all = visible[column.key];
+          const rows = all.filter((token) => !queued.has(token.mint));
 
           return (
             <Card key={column.key} className="flex min-w-0 flex-col">
@@ -307,15 +352,16 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
                 }
               />
               <div className="flex flex-1 flex-col p-2">
-                {rows.length > 0 ? (
+                {all.length > 0 ? (
                   <div className="divide-y divide-line/60">
-                    {rows.map((token) => (
+                    {rows.map((token, index) => (
                       <TokenRow
                         key={token.mint}
                         token={token}
                         variant={column.variant}
                         nowMs={nowMs}
                         isNew={arrived.has(token.mint)}
+                        enterDelayMs={index * 26}
                       />
                     ))}
                   </div>

@@ -184,7 +184,7 @@ export function PriceChart({ mint }: { mint: string }) {
         <div ref={containerRef} className="h-[320px] w-full sm:h-[380px]" />
         {status !== "ready" ? (
           <div className="pointer-events-none absolute inset-0 grid place-items-center">
-            <p className="rounded-full border border-line bg-card/90 px-3 py-1.5 text-[12px] font-semibold text-muted">
+            <p className="max-w-[92%] rounded-[14px] border border-line bg-card/90 px-3 py-1.5 text-center text-[12px] font-semibold text-muted">
               {status === "loading"
                 ? "Loading candles…"
                 : status === "empty"

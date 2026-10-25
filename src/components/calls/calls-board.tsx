@@ -7,6 +7,7 @@ import { CallCard } from "@/components/calls/call-card";
 import { EmptyState } from "@/components/empty-state";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Pill } from "@/components/ui/pill";
+import { trackEvent } from "@/lib/analytics";
 import {
   formatCountdown,
   type CallSide,
@@ -146,6 +147,9 @@ export function CallsBoard({ initial }: { initial: CallsView }) {
       await refresh();
       return;
     }
+
+    const kind = view.active.find((call) => call.id === callId)?.kind;
+    trackEvent("call_pick", { side, kind: kind ?? "unknown" });
 
     // Show the pick immediately; the poll brings the authoritative copy.
     setView((current) => ({

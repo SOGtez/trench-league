@@ -5,11 +5,12 @@ No wallet, no deposits, no real money — prizes are points, badges and titles.
 
 > Real prices. Fake SOL. Prove you can survive the trenches.
 
-This repo is being built in phases. **Phases 1–5 are done** — setup, auth,
+This repo is being built in phases. **Phases 1–6 are done** — setup, auth,
 routing, the live market data layer, a working paper trading engine with coin
 pages, charts and a portfolio, friend leagues with invite codes and a live
-leaderboard, and scored calls with streaks, points and badges. See
-[Build status](#build-status).
+leaderboard, scored calls with streaks, points and badges, and a polish pass
+with a phone-sized layout, loading/error states and privacy-friendly analytics.
+See [Build status](#build-status).
 
 ## Stack
 
@@ -18,7 +19,8 @@ leaderboard, and scored calls with streaks, points and badges. See
 - Supabase (Postgres, Auth, Realtime) via `@supabase/ssr`
 - Live market data from GeckoTerminal + Jupiter, both keyless
 - TradingView Lightweight Charts for the coin chart
-- Vercel + Vercel Cron for scheduled jobs (phase 4/5)
+- Vercel for hosting, plus `pg_cron` in Supabase for scheduled jobs (phase 5)
+- Vercel Web Analytics for page views and product events (phase 6)
 
 ## Setup
 
@@ -151,7 +153,7 @@ supabase/migrations/0004_calls.sql
 | 3 | Trading engine, coin page, chart, portfolio | done |
 | 4 | Leagues, per-league accounts, invite codes, live leaderboard | done |
 | 5 | Calls, scoring, streaks, badges, profile | done |
-| 6 | Polish, mobile pass, landing, analytics | next |
+| 6 | Polish, mobile pass, landing, analytics | done |
 
 ## Paper trading engine
 
@@ -265,6 +267,27 @@ select status_code, created from net._http_response order by created desc limit 
 select jobname, status, return_message, start_time from cron.job_run_details
   order by start_time desc limit 5;
 ```
+
+## Polish and analytics
+
+- **Loading, error and 404 states.** `(app)/loading.tsx` mirrors the page header
+  and card grid so content lands in place instead of jumping, `error.tsx` puts a
+  retry in front of a thrown page without printing the underlying message (just
+  the digest), and `not-found.tsx` catches both bad URLs and private leagues.
+- **Phone layout.** The header collapses below 640px to the logo mark, the
+  balance, your initials and an icon-only sign out; the nav becomes a
+  sideways-scrolling strip. Every page was measured at 390px with Playwright and
+  now reports `scrollWidth === 390` — no sideways scroll anywhere.
+- **Discover lands coin by coin.** New arrivals go into a queue and are released
+  one at a time (180ms apart, capped at eight), so a refresh reads as coins
+  dropping in rather than a whole board repainting. The first paint staggers rows
+  26ms apart per column. `prefers-reduced-motion` skips both.
+- **Analytics.** `@vercel/analytics` records page views, and `src/lib/analytics.ts`
+  wraps `track()` for product events: `trade_filled` (`side`, `mint`) and
+  `call_pick` (`side`, `kind`). It is cookieless and stores no personal data, so
+  there is no consent banner. **Enabling it is a dashboard switch**: Vercel →
+  your project → **Analytics → Enable Web Analytics**. Until that is on, the
+  script is a no-op and events are dropped.
 
 ## Market data notes (checked before building)
 

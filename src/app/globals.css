@@ -92,8 +92,29 @@
   }
 }
 
+/* Coins land one after another instead of the whole board appearing at once. */
+@keyframes row-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .animate-\[row-arrive_1\.8s_ease-out\] {
+  .animate-\[row-arrive_1\.8s_ease-out\],
+  .animate-\[row-enter_320ms_ease-out_both\] {
+    animation: none;
+    /* The animation above normally owns visibility; without it the row must
+       not stay at the keyframe's starting opacity. */
+    opacity: 1;
+    transform: none;
+  }
+
+  .animate-pulse {
     animation: none;
   }
 }

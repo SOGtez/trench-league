@@ -70,7 +70,7 @@ export function Landing() {
           <h1 className="mt-7 text-[38px] font-extrabold leading-[1.04] tracking-[-0.03em] sm:text-[58px]">
             Practice memecoin trading
             <br className="hidden sm:block" /> with fake SOL.
-            <span className="mt-2 block text-muted">
+            <span className="mt-2 block text-[22px] leading-[1.15] text-muted sm:text-[40px]">
               Compete with friends for bragging rights.
             </span>
           </h1>

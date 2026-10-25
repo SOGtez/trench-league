@@ -28,7 +28,14 @@ export function LogoMark({ className }: { className?: string }) {
   );
 }
 
-export function Wordmark({ className }: { className?: string }) {
+export function Wordmark({
+  className,
+  compact = false,
+}: {
+  className?: string;
+  /** Mark only on phones, so the app header still fits a 390px screen. */
+  compact?: boolean;
+}) {
   return (
     <Link
       href="/"
@@ -36,7 +43,12 @@ export function Wordmark({ className }: { className?: string }) {
       aria-label="Trench League home"
     >
       <LogoMark />
-      <span className="text-[15px] font-extrabold tracking-tight text-ink">
+      <span
+        className={cn(
+          "text-[15px] font-extrabold tracking-tight text-ink",
+          compact && "hidden sm:inline",
+        )}
+      >
         Trench League
       </span>
     </Link>

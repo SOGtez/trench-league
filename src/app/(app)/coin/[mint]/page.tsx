@@ -137,9 +137,11 @@ export default async function CoinPage({ params }: CoinPageProps) {
         <Stat
           label={token.graduated ? "Status" : "To graduation"}
           value={
-            token.curveProgressPct !== null
-              ? `${Math.round(token.curveProgressPct)}%`
-              : "Graduated"
+            token.graduated
+              ? "Graduated"
+              : token.curveProgressPct !== null
+                ? `${Math.round(token.curveProgressPct)}%`
+                : "—"
           }
         />
       </div>

@@ -7,6 +7,7 @@ import {
   formatAge,
   formatCompactUsd,
   formatPct,
+  formatUsdPrice,
   toneForPnl,
 } from "@/lib/utils";
 
@@ -17,12 +18,15 @@ export function TokenRow({
   variant,
   nowMs,
   isNew = false,
+  enterDelayMs = 0,
 }: {
   token: MarketToken;
   variant: TokenRowVariant;
   nowMs: number;
   /** Appeared in the latest refresh — flashes once so the update is visible. */
   isNew?: boolean;
+  /** Staggers the entrance so a column fills coin by coin. */
+  enterDelayMs?: number;
 }) {
   const fdv = formatCompactUsd(token.fdvUsd);
   const volume1h = formatCompactUsd(token.volume1hUsd);
@@ -34,10 +38,15 @@ export function TokenRow({
       ? `${Math.round(token.curveProgressPct)}% curve`
       : `on ${token.dex}`;
 
+  // A coin minutes off the curve has no market cap yet, so showing "$0" tells
+  // nobody anything — its price is the number that actually exists.
+  const launchPrice =
+    !token.fdvUsd && token.priceUsd ? formatUsdPrice(token.priceUsd) : fdv;
+
   const primary =
     variant === "trending"
       ? { value: change, tone: changeTone }
-      : { value: fdv, tone: "text-ink" };
+      : { value: variant === "launch" ? launchPrice : fdv, tone: "text-ink" };
 
   // A minute-old launch always shows 0% for the hour, so show how far up the
   // curve it is instead; graduates care about flow over the full day.
@@ -52,14 +61,18 @@ export function TokenRow({
     variant === "trending" ? `${fdv} mcap` : `${token.buys1h}b / ${token.sells1h}s`;
 
   return (
-    <Link
-      href={`/coin/${token.mint}`}
-      className={cn(
-        "block rounded-[12px] px-2 py-2.5 transition-colors hover:bg-hover",
-        isNew && "animate-[row-arrive_1.8s_ease-out]",
-      )}
+    <div
+      className="animate-[row-enter_320ms_ease-out_both]"
+      style={{ animationDelay: `${enterDelayMs}ms` }}
     >
-      <div className="flex items-center gap-2.5">
+      <Link
+        href={`/coin/${token.mint}`}
+        className={cn(
+          "block rounded-[12px] px-2 py-2.5 transition-colors hover:bg-hover",
+          isNew && "animate-[row-arrive_1.8s_ease-out]",
+        )}
+      >
+        <div className="flex items-center gap-2.5">
         <TokenAvatar
           mint={token.mint}
           symbol={token.symbol}
@@ -96,10 +109,11 @@ export function TokenRow({
         </div>
       </div>
 
-      {variant === "graduating" && token.curveProgressPct !== null ? (
-        <CurveBar pct={token.curveProgressPct} />
-      ) : null}
-    </Link>
+        {variant === "graduating" && token.curveProgressPct !== null ? (
+          <CurveBar pct={token.curveProgressPct} />
+        ) : null}
+      </Link>
+    </div>
   );
 }
 
