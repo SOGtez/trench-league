@@ -5,10 +5,11 @@ No wallet, no deposits, no real money — prizes are points, badges and titles.
 
 > Real prices. Fake SOL. Prove you can survive the trenches.
 
-This repo is being built in phases. **Phases 1–4 are done** — setup, auth,
+This repo is being built in phases. **Phases 1–5 are done** — setup, auth,
 routing, the live market data layer, a working paper trading engine with coin
-pages, charts and a portfolio, and friend leagues with invite codes and a live
-leaderboard. Calls land in phase 5. See [Build status](#build-status).
+pages, charts and a portfolio, friend leagues with invite codes and a live
+leaderboard, and scored calls with streaks, points and badges. See
+[Build status](#build-status).
 
 ## Stack
 
@@ -38,6 +39,8 @@ npm install
      `execute_paper_trade` function, the only path that moves balances.
    - [0003_leagues.sql](supabase/migrations/0003_leagues.sql) — league
      creation, invite-code joins and the standings query.
+   - [0004_calls.sql](supabase/migrations/0004_calls.sql) — round metadata,
+     scored picks, streaks, badges and the call functions.
 3. Copy the project URL, the **anon** key and the **service_role** key from
    **Project Settings → API**.
 
@@ -59,6 +62,7 @@ cp .env.example .env.local
 | `PUMPPORTAL_API_KEY` | optional | Real-time trade stream; the free launch stream needs no key |
 | `SWAP_FEE_BPS` | optional | Paper swap fee, `100` = 1% (default) |
 | `PRIORITY_FEE_SOL` | optional | Fixed priority fee per fill, default `0.001` SOL |
+| `CRON_SECRET` | optional | Bearer token for `/api/cron/calls`; without it that route is disabled |
 
 Only the Supabase pair is required. **Discover needs no market-data keys** — it
 reads GeckoTerminal's public API (30 requests/min → cached server-side for 20s)
@@ -99,10 +103,13 @@ src/
   app/api/market/candles/    # OHLCV for the coin chart
   app/api/trade/quote/       # live fill preview (same pricing as the fill)
   app/api/leagues/[id]/leaderboard/  # standings the league page polls every 15s
+  app/api/calls/round/       # calls board + lazy round generation and scoring
+  app/api/cron/calls/        # optional scheduled scoring (CRON_SECRET)
   components/                # UI kit, header, landing, dashboard, discover, coin
     discover/                # board, rows, avatars
     coin/                    # trade panel, candlestick chart
     league/                  # create/join forms, leaderboard, account switcher
+    calls/                   # calls board, single-call card
   lib/
     market/                  # market data layer
       types.ts               # MarketToken / DiscoverSnapshot
@@ -118,6 +125,11 @@ src/
       active-account.ts      # practice vs league account resolution (cookie + ownership check)
       queries.ts             # league lists, my equity per league
       standings.ts           # mark-to-market standings, ranked by % gain
+    calls/                   # calls phase
+      types.ts               # CallView / CallsView + round constants
+      rounds.ts              # lazy round generation from the live board
+      settle.ts              # candle-close settlement, then scoring in SQL
+      queries.ts             # calls board reads + crowd split
     supabase/{client,server,proxy,env,admin}.ts
     auth.ts                  # server-side auth context (user + profile + accounts)
     utils.ts                 # formatters
@@ -125,6 +137,7 @@ src/
 supabase/migrations/0001_init.sql
 supabase/migrations/0002_trading.sql
 supabase/migrations/0003_leagues.sql
+supabase/migrations/0004_calls.sql
 ```
 
 ## Build status
@@ -135,8 +148,8 @@ supabase/migrations/0003_leagues.sql
 | 2 | Market data routes/cache, Discover live columns | done |
 | 3 | Trading engine, coin page, chart, portfolio | done |
 | 4 | Leagues, per-league accounts, invite codes, live leaderboard | done |
-| 5 | Calls, scoring, streaks, badges, profile | next |
-| 6 | Polish, mobile pass, landing, analytics | pending |
+| 5 | Calls, scoring, streaks, badges, profile | done |
+| 6 | Polish, mobile pass, landing, analytics | next |
 
 ## Paper trading engine
 
@@ -191,6 +204,39 @@ function that creates the account in the same transaction. Private leagues are
 hidden by RLS, the league page 404s for non-members, and the leaderboard route
 checks membership before it touches the service role and returns only the board
 fields.
+
+## Calls and scoring
+
+A round runs every 15 minutes, on the quarter hour, and contains two calls: an
+up/down on one liquid coin, and a head-to-head between two. Picks lock ten
+minutes in and the round resolves at the quarter hour against the pool's
+1-minute candle close — settlement reads the candle that *covers* the resolve
+time, so a run that happens late (or is retried an hour afterwards) still scores
+the real close rather than the price at retry time.
+
+| Result | Points |
+| --- | --- |
+| Correct call | 100 |
+| Streak bonus | +25 × current streak, capped at four |
+| Contrarian bonus | +50 when fewer than 40% of picks won |
+| Wrong call | 0, and the streak resets |
+
+Badges: `first_call` on your first pick, `hot_streak` at five correct in a row,
+`sharp` at ten correct calls, `against_the_grain` for a contrarian win.
+
+Nothing that decides a number runs in the browser. `place_call_pick` checks the
+lock itself and takes only a call id and a side, and `resolve_call` writes
+`correct` and `points` in one transaction before updating the profile totals and
+awarding badges. `call_picks` is no longer writable by `authenticated`: the
+insert/update policies from `0001_init.sql` are dropped in `0004_calls.sql`,
+because a row-level policy cannot stop a client from writing `points` directly.
+
+Rounds are also created lazily. `GET /api/calls/round` — what the board polls
+every 5 seconds — opens the missing round and scores anything past its resolve
+time, so the game works on a fresh deployment with no scheduler configured.
+`GET /api/cron/calls` does the same job on a schedule; it requires
+`Authorization: Bearer $CRON_SECRET` and is disabled when that variable is
+unset.
 
 ## Market data notes (checked before building)
 
