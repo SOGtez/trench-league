@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { EmptyState } from "@/components/empty-state";
 import { TokenRow, type TokenRowVariant } from "@/components/discover/token-row";
@@ -13,7 +13,8 @@ import type {
 } from "@/lib/market/types";
 import { ageSeconds, cn, formatAge } from "@/lib/utils";
 
-const POLL_MS = 15_000;
+/** Snapshot rebuilds cap how fast data can change, so polling faster is waste. */
+const POLL_MS = 7_000;
 const MINT_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 type FilterId = "young" | "mcap" | "volume" | "curve";
@@ -84,6 +85,11 @@ const COLUMNS: Array<{
 
 type Status = "live" | "reconnecting";
 
+function mintsOf(snapshot: DiscoverSnapshot): Set<string> {
+  const { launches, graduating, trending } = snapshot.columns;
+  return new Set([...launches, ...graduating, ...trending].map((t) => t.mint));
+}
+
 export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
   const router = useRouter();
   const [snapshot, setSnapshot] = useState(initial);
@@ -91,6 +97,9 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
   const [query, setQuery] = useState("");
   const [activeFilters, setActiveFilters] = useState<FilterId[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.parse(initial.generatedAt));
+  // Coins that appeared in the latest refresh, so arrivals are visible.
+  const [arrived, setArrived] = useState<Set<string>>(() => new Set());
+  const known = useRef(mintsOf(initial));
 
   // Poll in the background, pausing while the tab is hidden.
   useEffect(() => {
@@ -101,14 +110,27 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
       if (document.visibilityState === "hidden") return;
 
       try {
-        const response = await fetch("/api/market/discover", {
-          cache: "no-store",
-        });
+        // The query string is a cache buster: it keeps an intermediary from
+        // answering with a board older than the one already on screen.
+        const response = await fetch(
+          `/api/market/discover?t=${Date.now()}`,
+          { cache: "no-store" },
+        );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const next = (await response.json()) as DiscoverSnapshot;
         if (cancelled) return;
-        setSnapshot(next);
+
+        setSnapshot((current) =>
+          next.generatedAt === current.generatedAt ? current : next,
+        );
+
+        const fresh = mintsOf(next);
+        const newcomers = new Set(
+          [...fresh].filter((mint) => !known.current.has(mint)),
+        );
+        known.current = fresh;
+        setArrived(newcomers);
         setStatus("live");
       } catch {
         if (!cancelled) setStatus("reconnecting");
@@ -293,6 +315,7 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
                         token={token}
                         variant={column.variant}
                         nowMs={nowMs}
+                        isNew={arrived.has(token.mint)}
                       />
                     ))}
                   </div>

@@ -5,10 +5,10 @@ No wallet, no deposits, no real money — prizes are points, badges and titles.
 
 > Real prices. Fake SOL. Prove you can survive the trenches.
 
-This repo is being built in phases. **Phases 1–3 are done** — setup, auth,
-routing, the live market data layer, and a working paper trading engine with
-coin pages, charts and a portfolio. Leagues and calls land in later phases. See
-[Build status](#build-status).
+This repo is being built in phases. **Phases 1–4 are done** — setup, auth,
+routing, the live market data layer, a working paper trading engine with coin
+pages, charts and a portfolio, and friend leagues with invite codes and a live
+leaderboard. Calls land in phase 5. See [Build status](#build-status).
 
 ## Stack
 
@@ -36,6 +36,8 @@ npm install
      practice account with **10 paper SOL**.
    - [0002_trading.sql](supabase/migrations/0002_trading.sql) — the
      `execute_paper_trade` function, the only path that moves balances.
+   - [0003_leagues.sql](supabase/migrations/0003_leagues.sql) — league
+     creation, invite-code joins and the standings query.
 3. Copy the project URL, the **anon** key and the **service_role** key from
    **Project Settings → API**.
 
@@ -59,7 +61,7 @@ cp .env.example .env.local
 | `PRIORITY_FEE_SOL` | optional | Fixed priority fee per fill, default `0.001` SOL |
 
 Only the Supabase pair is required. **Discover needs no market-data keys** — it
-reads GeckoTerminal's public API (30 requests/min → cached server-side for 30s)
+reads GeckoTerminal's public API (30 requests/min → cached server-side for 20s)
 and Jupiter's keyless price endpoint. Until the Supabase variables are set the
 app still boots and shows a "Supabase not connected" banner instead of failing.
 
@@ -93,12 +95,14 @@ src/
     welcome/username/        # post-signup username step
     (app)/                   # signed-in shell (header + auth guard)
       discover/ portfolio/ leagues/ calls/ profile/ coin/[mint]/
-  app/api/market/discover/   # GET snapshot the Discover board polls every 15s
+  app/api/market/discover/   # GET snapshot the Discover board polls every 7s
   app/api/market/candles/    # OHLCV for the coin chart
   app/api/trade/quote/       # live fill preview (same pricing as the fill)
+  app/api/leagues/[id]/leaderboard/  # standings the league page polls every 15s
   components/                # UI kit, header, landing, dashboard, discover, coin
     discover/                # board, rows, avatars
     coin/                    # trade panel, candlestick chart
+    league/                  # create/join forms, leaderboard, account switcher
   lib/
     market/                  # market data layer
       types.ts               # MarketToken / DiscoverSnapshot
@@ -110,12 +114,17 @@ src/
       prices.ts              # batched prices for portfolio valuation
       cache.ts               # TTL memo + request coalescing (rate limits)
     trade/quote.ts           # constant-product pricing, fees, impact
+    leagues/                 # league model
+      active-account.ts      # practice vs league account resolution (cookie + ownership check)
+      queries.ts             # league lists, my equity per league
+      standings.ts           # mark-to-market standings, ranked by % gain
     supabase/{client,server,proxy,env,admin}.ts
-    auth.ts                  # server-side auth context (user + profile + practice account)
+    auth.ts                  # server-side auth context (user + profile + accounts)
     utils.ts                 # formatters
   proxy.ts                   # Next 16 proxy (= middleware): session refresh + route guards
 supabase/migrations/0001_init.sql
 supabase/migrations/0002_trading.sql
+supabase/migrations/0003_leagues.sql
 ```
 
 ## Build status
@@ -125,8 +134,8 @@ supabase/migrations/0002_trading.sql
 | 1 | Setup, Supabase, auth, username step, header, routing, design tokens | done |
 | 2 | Market data routes/cache, Discover live columns | done |
 | 3 | Trading engine, coin page, chart, portfolio | done |
-| 4 | Leagues, accounts, leaderboards, cron | next |
-| 5 | Calls, scoring, streaks, badges, profile | pending |
+| 4 | Leagues, per-league accounts, invite codes, live leaderboard | done |
+| 5 | Calls, scoring, streaks, badges, profile | next |
 | 6 | Polish, mobile pass, landing, analytics | pending |
 
 ## Paper trading engine
@@ -151,6 +160,38 @@ Writes are atomic: the app decides the price, then
 updates the position in one transaction. The browser can never call it directly,
 so a fill or a price cannot be forged from devtools.
 
+## Leagues
+
+A league is a scoreboard with its own money. Joining creates a `league`
+account funded with the league's starting balance, so league play never touches
+the practice balance — and two leagues never share one either. The header and
+the trade panel always show which account you're trading; the choice is stored
+in a `tl_account` cookie and re-checked against the database on every read, so
+editing the cookie only ever falls back to an account you actually own.
+
+- **Invite codes** are 8 characters from an alphabet without `0/O/1/I`, so they
+  survive being read aloud or retyped from a screenshot.
+- **Creating** a league joins you on the spot and returns the code. **Joining**
+takes a case-insensitive code and is rejected when the league is full, ended, or
+you're already in it — a second join can't mint a second starting balance.
+- **Ranking is % gain**, not raw equity, so a 5 SOL league and a 100 SOL league
+  score the same way. Open positions are marked to the live pool price on every
+  read; the page polls standings every 15s.
+- **Late joins** still get the full balance, which is exactly why scoring is %
+  based. Players who join more than an hour after the start are badged `late`
+  so nobody is confused by a 0% line outranking a losing one.
+- **The window is enforced in the fill**, not just in the UI: a league account
+  stops trading once `ends_at` passes.
+
+Security shape: `create_paper_league`, `join_paper_league` and
+`league_standings_base` are `SECURITY DEFINER` and executable by `service_role`
+only, so the browser can pass a name or a code but never a balance. Direct
+inserts into `league_members` are revoked — joining has to go through the
+function that creates the account in the same transaction. Private leagues are
+hidden by RLS, the league page 404s for non-members, and the leaderboard route
+checks membership before it touches the service role and returns only the board
+fields.
+
 ## Market data notes (checked before building)
 
 **What phase 2 actually uses** (verified live on 2026-10-24, SOL ≈ $101.5):
@@ -160,8 +201,10 @@ so a fill or a price cannot be forged from devtools.
   and 5m/1h/24h transaction counts; `/networks/solana/dexes/pump-fun/pools`
   sorted by volume provides the bonding-curve candidates for "about to
   graduate"; `/networks/solana/trending_pools` backs the trending column. The
-  market layer fetches six pages per refresh, memoised for 30s, so upstream sees
-  ~12 requests/min at worst and the CDN absorbs every other tab.
+  market layer fetches five pages per refresh, memoised for 20s, so upstream
+  sees ~15 requests/min at worst and concurrent tabs share the in-memory copy.
+  The polled response itself is `no-store`: a shared cache answering with an
+  older board is what makes a live page look frozen.
 - **Jupiter** (`api.jup.ag/price/v3`) — keyless SOL/USD, cached 30s. If it
   fails, the SOL price is derived from any SOL-quoted GeckoTerminal pool.
 - **Bonding-curve progress is an estimate**: `FDV / (411 × SOL price)`. Checked
@@ -172,6 +215,16 @@ so a fill or a price cannot be forged from devtools.
 - **pump.fun's own frontend API is not usable server-side** — both
   `frontend-api.pump.fun` and `frontend-api-v3.pump.fun` answer `403` with a
   Cloudflare challenge. The plan below predates that; GeckoTerminal replaces it.
+- **Token art comes from Jupiter** (`api.jup.ag/tokens/v2/search`), which answers
+  a comma-separated list of mints with each token's `icon` in one request —
+  pool feeds carry no images. One batched call per board refresh fills
+  `logoUrl`; per-token lookups would cost 30 requests a tick. Icons are
+  hot-linked from whichever CDN hosts them (pump, IPFS gateways, Twitter,
+  axiom…), so `TokenAvatar` falls back to a generated badge when a host is dead
+  or blocks the referrer. Public IPFS gateways are repointed at
+  `pump.mypinata.cloud` in the market layer: `ipfs.io` and `dweb.link` both
+  answer `429` to board-scale traffic, which was breaking about a fifth of
+  pump.fun icons (measured 2026-10-25).
 
 
 - **PumpPortal** — the new-token stream is still free; since May 2026 the

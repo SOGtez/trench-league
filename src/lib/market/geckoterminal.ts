@@ -171,5 +171,7 @@ export function toMarketToken(
     sells1h: transactions?.sells ?? 0,
     curveProgressPct: onCurve ? curveProgressPct(fdvUsd, solPriceUsd) : null,
     graduated: dex !== "pump-fun",
+    // Pool feeds carry no art; discover.ts and token.ts attach it in one batch.
+    logoUrl: null,
   };
 }

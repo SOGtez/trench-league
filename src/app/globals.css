@@ -82,6 +82,22 @@
   }
 }
 
+/* A coin that just hit the board glows once, then settles. */
+@keyframes row-arrive {
+  from {
+    background-color: rgb(91 140 255 / 0.18);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-\[row-arrive_1\.8s_ease-out\] {
+    animation: none;
+  }
+}
+
 /* Numeric text: mono, fixed-width digits so prices don't jitter. */
 @utility num {
   font-family: var(--font-mono);

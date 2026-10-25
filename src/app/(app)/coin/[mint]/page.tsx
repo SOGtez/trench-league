@@ -66,13 +66,17 @@ export default async function CoinPage({ params }: CoinPageProps) {
 
   const { token, solPriceUsd } = snapshot;
 
+  // Position and balance always describe the active account, so the panel can
+  // never show practice money while a league fill is what executes.
+  const account = ctx?.active ?? null;
+
   let position = { tokens: 0, costSol: 0 };
-  if (ctx?.practice) {
+  if (account) {
     const supabase = await createClient();
     const { data } = await supabase
       .from("positions")
       .select("token_amount, cost_basis_sol")
-      .eq("account_id", ctx.practice.id)
+      .eq("account_id", account.id)
       .eq("token_mint", mint)
       .maybeSingle<{ token_amount: string; cost_basis_sol: string }>();
 
@@ -95,6 +99,7 @@ export default async function CoinPage({ params }: CoinPageProps) {
           <TokenAvatar
             mint={token.mint}
             symbol={token.symbol}
+            logoUrl={token.logoUrl}
             className="size-11 text-[13px]"
           />
           <div className="min-w-0">
@@ -178,11 +183,13 @@ export default async function CoinPage({ params }: CoinPageProps) {
             <TradePanel
               mint={token.mint}
               symbol={token.symbol}
-              solBalance={ctx?.practice?.sol_balance ?? 0}
+              solBalance={account?.solBalance ?? 0}
               positionTokens={position.tokens}
               positionCostSol={position.costSol}
               priceUsd={token.priceUsd}
               solPriceUsd={solPriceUsd}
+              accounts={ctx?.accounts ?? []}
+              activeAccountId={account?.id ?? null}
             />
           </div>
         </Card>

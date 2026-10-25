@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
+import { resolveActiveAccount } from "@/lib/leagues/active-account";
 import { getTokenSnapshot } from "@/lib/market/token";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isTradingConfigured } from "@/lib/supabase/env";
@@ -27,6 +28,8 @@ const DB_ERRORS: Record<string, string> = {
   insufficient_tokens: "You don't hold that many tokens.",
   invalid_amount: "That amount is too small to fill.",
   account_not_owned: "That account isn't yours.",
+  league_ended: "That league has ended — trading is closed.",
+  invalid_account_type: "That account can't trade right now.",
 };
 
 export async function executeTrade(
@@ -60,15 +63,12 @@ export async function executeTrade(
     return { error: "Your session expired. Log in again." };
   }
 
-  const { data: account } = await supabase
-    .from("accounts")
-    .select("id")
-    .eq("user_id", user.id)
-    .eq("type", "practice")
-    .maybeSingle<{ id: string }>();
+  // Practice or a league you're in — whichever the terminal is pointed at. The
+  // resolver only ever returns accounts owned by this session's user.
+  const account = await resolveActiveAccount(user.id);
 
   if (!account) {
-    return { error: "No practice account found for this login." };
+    return { error: "No trading account found for this login." };
   }
 
   const snapshot = await getTokenSnapshot(mint);

@@ -8,7 +8,9 @@ import { cn, formatSol, initials } from "@/lib/utils";
 
 export function AppHeader({ ctx }: { ctx: AuthContext | null }) {
   const name = ctx ? displayName(ctx) : "guest";
-  const balance = ctx?.practice?.sol_balance ?? 0;
+  const account = ctx?.active ?? null;
+  const balance = account?.solBalance ?? 0;
+  const inLeague = account?.type === "league";
 
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-header/90 backdrop-blur-md">
@@ -22,15 +24,25 @@ export function AppHeader({ ctx }: { ctx: AuthContext | null }) {
         <div className="ml-auto flex items-center gap-2.5">
           <Link
             href="/portfolio"
-            title="Practice account balance"
-            className="flex h-10 items-center gap-2 rounded-full border border-line bg-card px-3.5 transition-colors hover:border-line-strong"
+            title={
+              inLeague
+                ? `League account: ${account?.label}`
+                : "Practice account balance"
+            }
+            className="flex h-10 max-w-[220px] items-center gap-2 rounded-full border border-line bg-card px-3.5 transition-colors hover:border-line-strong"
           >
-            <span className="size-1.5 rounded-full bg-up" aria-hidden />
+            <span
+              aria-hidden
+              className={cn(
+                "size-1.5 rounded-full",
+                inLeague ? "bg-brand" : "bg-up",
+              )}
+            />
             <span className="num text-[13px] font-bold text-ink">
               {formatSol(balance)}
             </span>
-            <span className="text-[10px] font-bold uppercase tracking-wide text-muted">
-              SOL paper
+            <span className="truncate text-[10px] font-bold uppercase tracking-wide text-muted">
+              {inLeague ? account?.label : "SOL paper"}
             </span>
           </Link>
 

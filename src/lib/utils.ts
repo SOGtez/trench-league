@@ -98,6 +98,32 @@ export function formatAge(
   return `${Math.floor(days / 30)}mo`;
 }
 
+/** Time until an ISO timestamp: "3d 4h", "2h 12m", "48s", "ended". */
+export function formatTimeLeft(
+  iso: string | null | undefined,
+  nowMs = Date.now(),
+): string {
+  if (!iso) return "—";
+
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return "—";
+
+  const seconds = Math.round((then - nowMs) / 1000);
+  if (seconds <= 0) return "ended";
+
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3_600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86_400) {
+    const hours = Math.floor(seconds / 3_600);
+    const minutes = Math.floor((seconds % 3_600) / 60);
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+
+  const days = Math.floor(seconds / 86_400);
+  const hours = Math.floor((seconds % 86_400) / 3_600);
+  return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+}
+
 export function initials(name: string | null | undefined): string {
   const clean = (name ?? "?").replace(/[^a-zA-Z0-9]/g, "");
   return (clean.slice(0, 2) || "?").toUpperCase();

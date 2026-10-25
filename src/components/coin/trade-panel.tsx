@@ -5,8 +5,10 @@ import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 
 import { executeTrade, type TradeState } from "@/app/(app)/coin/[mint]/actions";
 import { FormError } from "@/components/auth/text-field";
+import { AccountSwitcher } from "@/components/league/account-switcher";
 import { PaperLabel } from "@/components/paper-label";
 import { Button } from "@/components/ui/button";
+import type { AccountSummary } from "@/lib/leagues/active-account";
 import type { TradeQuote, TradeSide } from "@/lib/trade/quote";
 import {
   cn,
@@ -30,6 +32,8 @@ export function TradePanel({
   positionCostSol,
   priceUsd,
   solPriceUsd,
+  accounts,
+  activeAccountId,
 }: {
   mint: string;
   symbol: string;
@@ -38,6 +42,8 @@ export function TradePanel({
   positionCostSol: number;
   priceUsd: number | null;
   solPriceUsd: number | null;
+  accounts: AccountSummary[];
+  activeAccountId: string | null;
 }) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(executeTrade, initialState);
@@ -138,6 +144,16 @@ export function TradePanel({
 
   return (
     <div className="flex flex-col">
+      {accounts.length > 1 ? (
+        <div className="mb-3">
+          <AccountSwitcher
+            accounts={accounts}
+            activeId={activeAccountId}
+            variant="select"
+          />
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-2 gap-1 rounded-full border border-line bg-header p-1">
         {(["buy", "sell"] as const).map((option) => (
           <button

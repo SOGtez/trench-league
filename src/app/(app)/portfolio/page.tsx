@@ -1,11 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { TokenAvatar } from "@/components/discover/token-avatar";
 import { EmptyState } from "@/components/empty-state";
+import { AccountSwitcher } from "@/components/league/account-switcher";
 import { PageHeader } from "@/components/page-header";
 import { buttonStyles } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { getAuthContext } from "@/lib/auth";
+import { getTokenLogos } from "@/lib/market/logos";
 import { getLivePrices } from "@/lib/market/prices";
 import { getSolPriceUsd } from "@/lib/market/sol";
 import { createClient } from "@/lib/supabase/server";
@@ -45,8 +48,9 @@ type TradeRow = {
 
 export default async function PortfolioPage() {
   const ctx = await getAuthContext();
+  const account = ctx?.active ?? null;
 
-  if (!ctx?.practice) {
+  if (!ctx || !account) {
     return (
       <div className="space-y-6">
         <PageHeader
@@ -56,7 +60,7 @@ export default async function PortfolioPage() {
         <Card>
           <div className="p-8">
             <EmptyState
-              title="No practice account yet"
+              title="No trading account yet"
               description="Sign in to get a practice account with paper SOL and start trading."
             />
           </div>
@@ -66,7 +70,7 @@ export default async function PortfolioPage() {
   }
 
   const supabase = await createClient();
-  const accountId = ctx.practice.id;
+  const accountId = account.id;
 
   const [positionsResult, tradesResult] = await Promise.all([
     supabase
@@ -91,12 +95,13 @@ export default async function PortfolioPage() {
 
   const mints = [...new Set([...positions, ...trades].map((row) => row.token_mint))];
 
-  const [prices, solPrice, tokenRows] = await Promise.all([
+  const [prices, solPrice, tokenRows, logos] = await Promise.all([
     getLivePrices(positions.map((row) => row.token_mint)),
     getSolPriceUsd(),
     mints.length > 0
       ? supabase.from("tokens").select("mint, ticker").in("mint", mints)
       : Promise.resolve({ data: [] as { mint: string; ticker: string | null }[] }),
+    getTokenLogos(positions.map((row) => row.token_mint)),
   ]);
 
   const symbols = new Map<string, string>(
@@ -115,6 +120,7 @@ export default async function PortfolioPage() {
     return {
       mint: position.token_mint,
       symbol: symbolFor(position.token_mint),
+      logo: logos[position.token_mint] ?? null,
       tokens,
       avgEntry: Number(position.avg_entry_price),
       cost,
@@ -123,21 +129,19 @@ export default async function PortfolioPage() {
       pnl,
       pnlPct,
     };
-  });
-
-  const positionsValue = valued.reduce((sum, row) => sum + (row.value ?? 0), 0);
-  const cash = ctx.practice.sol_balance;
+  });  const positionsValue = valued.reduce((sum, row) => sum + (row.value ?? 0), 0);
+  const cash = account.solBalance;
   const accountValue = positionsValue + cash;
-  const starting = ctx.practice.starting_balance || 10;
+  const starting = account.startingBalance || 10;
   const totalPnl = accountValue - starting;
   const totalPnlPct = starting > 0 ? (totalPnl / starting) * 100 : 0;
   const feesPaid = trades.reduce((sum, trade) => sum + Number(trade.fees), 0);
+  const leagueCount = ctx.accounts.filter((entry) => entry.type === "league").length;
 
   const stats = [
     { label: "Account value", value: `${formatSolAmount(accountValue)} SOL` },
     {
-      label: "All-time P/L",
-      value: `${totalPnl >= 0 ? "+" : ""}${formatSolAmount(totalPnl)} SOL`,
+      label: "P/L vs start", value: `${totalPnl >= 0 ? "+" : ""}${formatSolAmount(totalPnl)} SOL`,
       tone: toneForPnl(totalPnl),
       sub: formatPct(totalPnlPct),
     },
@@ -151,7 +155,11 @@ export default async function PortfolioPage() {
     <div className="space-y-6">
       <PageHeader
         title="Portfolio"
-        subtitle="Practice account. Live prices, paper SOL."
+        subtitle={
+          account.type === "practice"
+            ? "Practice account. Live prices, paper SOL."
+            : `League account for ${account.label}. Live prices, paper SOL.`
+        }
         actions={
           <Link
             href="/discover"
@@ -162,13 +170,14 @@ export default async function PortfolioPage() {
         }
       />
 
-      <div className="no-scrollbar -mx-6 flex gap-2 overflow-x-auto px-6">
-        <span className="inline-flex h-9 shrink-0 items-center rounded-full bg-active px-3.5 text-[12px] font-bold text-ink">
-          Practice account
-        </span>
-        <span className="inline-flex h-9 shrink-0 items-center rounded-full border border-line px-3.5 text-[12px] font-semibold text-muted">
-          League accounts appear here once you join one
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <AccountSwitcher accounts={ctx.accounts} activeId={account.id} />
+        <Link
+          href="/leagues"
+          className="shrink-0 text-[12px] font-semibold text-muted transition-colors hover:text-ink"
+        >
+          {leagueCount > 0 ? "Manage leagues" : "Join a league"} →
+        </Link>
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
@@ -239,8 +248,14 @@ export default async function PortfolioPage() {
                     <td className="px-5 py-3">
                       <Link
                         href={`/coin/${row.mint}`}
-                        className="text-[13px] font-bold text-ink hover:text-link"
+                        className="flex items-center gap-2 text-[13px] font-bold text-ink hover:text-link"
                       >
+                        <TokenAvatar
+                          mint={row.mint}
+                          symbol={row.symbol}
+                          logoUrl={row.logo}
+                          className="size-6 text-[9px]"
+                        />
                         {row.symbol}
                       </Link>
                     </td>

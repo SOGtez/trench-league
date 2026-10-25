@@ -3,6 +3,7 @@ import { shortAddress } from "@/lib/utils";
 import { memoize } from "./cache";
 import { curveProgressPct } from "./curve";
 import { fetchPools, solPriceFromPools, toMarketToken } from "./geckoterminal";
+import { getTokenLogos } from "./logos";
 import { fetchSolPriceUsd } from "./sol";
 import { SOL_MINT, type MarketToken } from "./types";
 
@@ -26,10 +27,17 @@ const TTL_MS = 10_000;
 export function getTokenSnapshot(mint: string): Promise<TokenSnapshot | null> {
   return memoize(`token:${mint}`, TTL_MS, async () => {
     const jupiterSolPrice = await fetchSolPriceUsd();
-    const primary = await viaGeckoTerminal(mint, jupiterSolPrice);
-    if (primary) return primary;
+    const snapshot =
+      (await viaGeckoTerminal(mint, jupiterSolPrice)) ??
+      (await viaDexscreener(mint, jupiterSolPrice));
 
-    return viaDexscreener(mint, jupiterSolPrice);
+    if (!snapshot) return null;
+
+    const logos = await getTokenLogos([mint]);
+    return {
+      ...snapshot,
+      token: { ...snapshot.token, logoUrl: logos[mint] ?? null },
+    };
   });
 }
 
@@ -132,6 +140,7 @@ async function viaDexscreener(
       sells1h: pair.txns?.h1?.sells ?? 0,
       curveProgressPct: onCurve ? curveProgressPct(fdvUsd, solPriceUsd) : null,
       graduated: !onCurve,
+      logoUrl: null,
     };
 
     return { token, solPriceUsd, source: "dexscreener" };

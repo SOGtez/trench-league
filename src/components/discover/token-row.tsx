@@ -16,10 +16,13 @@ export function TokenRow({
   token,
   variant,
   nowMs,
+  isNew = false,
 }: {
   token: MarketToken;
   variant: TokenRowVariant;
   nowMs: number;
+  /** Appeared in the latest refresh — flashes once so the update is visible. */
+  isNew?: boolean;
 }) {
   const fdv = formatCompactUsd(token.fdvUsd);
   const volume1h = formatCompactUsd(token.volume1hUsd);
@@ -51,10 +54,17 @@ export function TokenRow({
   return (
     <Link
       href={`/coin/${token.mint}`}
-      className="block rounded-[12px] px-2 py-2.5 transition-colors hover:bg-hover"
+      className={cn(
+        "block rounded-[12px] px-2 py-2.5 transition-colors hover:bg-hover",
+        isNew && "animate-[row-arrive_1.8s_ease-out]",
+      )}
     >
       <div className="flex items-center gap-2.5">
-        <TokenAvatar mint={token.mint} symbol={token.symbol} />
+        <TokenAvatar
+          mint={token.mint}
+          symbol={token.symbol}
+          logoUrl={token.logoUrl}
+        />
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">

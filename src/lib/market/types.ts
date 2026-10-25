@@ -25,6 +25,8 @@ export type MarketToken = {
   curveProgressPct: number | null;
   /** True once the token left the bonding curve for an AMM pool. */
   graduated: boolean;
+  /** Token art, when the feed has any. Null renders the generated badge. */
+  logoUrl: string | null;
 };
 
 export type DiscoverColumns = {

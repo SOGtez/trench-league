@@ -5,11 +5,16 @@ import {
   toMarketToken,
   type GtPool,
 } from "./geckoterminal";
+import { getTokenLogos } from "./logos";
 import { fetchSolPriceUsd } from "./sol";
 import { SOL_MINT, type DiscoverSnapshot, type MarketToken } from "./types";
 
-/** The board refreshes slightly faster than this; upstream sees ~2 req/min. */
-const SNAPSHOT_TTL_MS = 30_000;
+/**
+ * How often a whole board is rebuilt. Every build is 5 GeckoTerminal requests,
+ * and the documented budget is 30 req/min, so 20s (15 req/min) leaves room for
+ * coin pages while the board still visibly moves.
+ */
+const SNAPSHOT_TTL_MS = 20_000;
 
 const LAUNCH_LIMIT = 12;
 const GRADUATING_LIMIT = 8;
@@ -71,6 +76,15 @@ async function buildSnapshot(): Promise<DiscoverSnapshot> {
     quoteMint: SOL_MINT,
   }).slice(0, TRENDING_LIMIT);
 
+  // One batched lookup for the whole board rather than one per coin.
+  const logos = await getTokenLogos(
+    [...launches, ...graduating, ...trending].map((token) => token.mint),
+  );
+  const withLogo = (token: MarketToken): MarketToken => ({
+    ...token,
+    logoUrl: logos[token.mint] ?? null,
+  });
+
   return {
     generatedAt: new Date().toISOString(),
     solPriceUsd,
@@ -79,7 +93,11 @@ async function buildSnapshot(): Promise<DiscoverSnapshot> {
       curvePoolsOne === null ||
       trendingPools === null ||
       solPriceUsd === null,
-    columns: { launches, graduating, trending },
+    columns: {
+      launches: launches.map(withLogo),
+      graduating: graduating.map(withLogo),
+      trending: trending.map(withLogo),
+    },
   };
 }
 
