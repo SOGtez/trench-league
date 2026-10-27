@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { EmptyState } from "@/components/empty-state";
 import { TokenRow, type TokenRowVariant } from "@/components/discover/token-row";
 import { Card, CardHeader } from "@/components/ui/card";
+import { useLivePrices } from "@/lib/market/live-prices";
 import type {
   DiscoverColumns,
   DiscoverSnapshot,
@@ -13,8 +14,12 @@ import type {
 } from "@/lib/market/types";
 import { ageSeconds, cn, formatAge } from "@/lib/utils";
 
-/** Snapshot rebuilds cap how fast data can change, so polling faster is waste. */
-const POLL_MS = 7_000;
+/**
+ * Snapshot rebuilds cap how fast the board's contents can change, so polling
+ * this endpoint faster than that is waste. Prices do not wait for it: they come
+ * from the 1s tick stream and are overlaid on the rows.
+ */
+const POLL_MS = 6_000;
 /** Arrivals are revealed one coin at a time, this far apart. */
 const REVEAL_MS = 180;
 /** A refresh that brings more than this many coins lands the rest at once. */
@@ -109,6 +114,18 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
   // Coins currently glowing, and when they landed, so the flash can expire.
   const [arrived, setArrived] = useState<Map<string, number>>(() => new Map());
   const known = useRef(mintsOf(initial));
+
+  // One batched request per second for every coin on the board.
+  const liveMints = useMemo(
+    () =>
+      [
+        ...snapshot.columns.launches,
+        ...snapshot.columns.graduating,
+        ...snapshot.columns.trending,
+      ].map((token) => token.mint),
+    [snapshot],
+  );
+  const livePrices = useLivePrices(liveMints);
 
   // Poll in the background, pausing while the tab is hidden.
   useEffect(() => {
@@ -360,6 +377,7 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
                         token={token}
                         variant={column.variant}
                         nowMs={nowMs}
+                        livePrice={livePrices[token.mint]}
                         isNew={arrived.has(token.mint)}
                         enterDelayMs={index * 26}
                       />
