@@ -21,7 +21,9 @@ export async function fetchSolPriceUsd(): Promise<number | null> {
     const response = await fetch(JUPITER_PRICE_URL, {
       headers: { accept: "application/json" },
       signal: AbortSignal.timeout(TIMEOUT_MS),
-      next: { revalidate: 30 },
+      // Freshness is decided by the memo above, not by a platform cache that
+      // could hand back the same price long after it moved.
+      cache: "no-store",
     });
 
     if (!response.ok) return null;

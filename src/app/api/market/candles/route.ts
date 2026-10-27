@@ -37,10 +37,12 @@ export async function GET(request: Request) {
   }
 
   // Throwing lets the memo serve the last good candle set through a rate-limit
-  // blip instead of blanking a chart that was already drawn.
+  // blip instead of blanking a chart that was already drawn. The TTL is short
+  // on purpose: GeckoTerminal allows 30 req/min, so 4s (15 req/min) leaves room
+  // for the pool lookup while keeping the newest bucket a few seconds old.
   const candles = await memoize(
     `candles:${pool.address}:${key}`,
-    30_000,
+    4_000,
     async () => {
       const data = await fetchCandles(
         pool.address,
@@ -60,12 +62,11 @@ export async function GET(request: Request) {
     );
   }
 
+  // A shared cache in front of this route would hand every tab the same old
+  // snapshot for as long as it liked, which is exactly the freeze this route
+  // used to show. The chart polls it every second; the memo is the only cache.
   return Response.json(
-    { candles, dex: pool.dex },
-    {
-      headers: {
-        "Cache-Control": "public, s-maxage=15, stale-while-revalidate=30",
-      },
-    },
+    { candles, dex: pool.dex, at: Date.now() },
+    { headers: { "Cache-Control": "no-store, must-revalidate" } },
   );
 }
