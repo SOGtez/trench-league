@@ -1,8 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { PriceChart } from "@/components/coin/price-chart";
-import { TradePanel } from "@/components/coin/trade-panel";
+import { LivePrice } from "@/components/coin/live-price";
+import { PriceChart, type ChartFill } from "@/components/coin/price-chart";
+import {
+  TradePanel,
+  type PositionStats,
+} from "@/components/coin/trade-panel";
 import { TokenAvatar } from "@/components/discover/token-avatar";
 import { PaperLabel } from "@/components/paper-label";
 import { buttonStyles } from "@/components/ui/button";
@@ -11,15 +15,13 @@ import { Pill } from "@/components/ui/pill";
 import { getAuthContext } from "@/lib/auth";
 import { getTokenSnapshot } from "@/lib/market/token";
 import { createClient } from "@/lib/supabase/server";
+import { priorityFeeSol, swapFeeBps } from "@/lib/trade/quote";
 import {
   cn,
   formatAge,
   formatCompactUsd,
-  formatPct,
   formatTokenAmount,
-  formatUsdPrice,
   shortAddress,
-  toneForPnl,
 } from "@/lib/utils";
 
 type CoinPageProps = { params: Promise<{ mint: string }> };
@@ -71,24 +73,87 @@ export default async function CoinPage({ params }: CoinPageProps) {
   const account = ctx?.active ?? null;
 
   let position = { tokens: 0, costSol: 0 };
+  let positionStats: PositionStats = {
+    investedSol: 0,
+    soldSol: 0,
+    remainingSol: 0,
+    pnlSol: 0,
+    pnlPct: 0,
+  };
+  let fills: ChartFill[] = [];
+  let investedSol = 0;
+  let soldSol = 0;
+
   if (account) {
     const supabase = await createClient();
-    const { data } = await supabase
-      .from("positions")
-      .select("token_amount, cost_basis_sol")
-      .eq("account_id", account.id)
-      .eq("token_mint", mint)
-      .maybeSingle<{ token_amount: string; cost_basis_sol: string }>();
+    const [positionResult, tradesResult] = await Promise.all([
+      supabase
+        .from("positions")
+        .select("token_amount, cost_basis_sol")
+        .eq("account_id", account.id)
+        .eq("token_mint", mint)
+        .maybeSingle<{ token_amount: string; cost_basis_sol: string }>(),
+      supabase
+        .from("trades")
+        .select("side, sol_amount, price, created_at")
+        .eq("account_id", account.id)
+        .eq("token_mint", mint)
+        .order("created_at", { ascending: true })
+        .limit(200),
+    ]);
 
-    if (data) {
+    if (positionResult.data) {
       position = {
-        tokens: Number(data.token_amount),
-        costSol: Number(data.cost_basis_sol),
+        tokens: Number(positionResult.data.token_amount),
+        costSol: Number(positionResult.data.cost_basis_sol),
       };
+    }
+
+    const rows =
+      (tradesResult.data as
+        | { side: "buy" | "sell"; sol_amount: string; price: string; created_at: string }[]
+        | null) ?? [];
+
+    for (const row of rows) {
+      const solAmount = Number(row.sol_amount);
+      if (!Number.isFinite(solAmount)) continue;
+
+      if (row.side === "buy") investedSol += solAmount;
+      else soldSol += solAmount;
+    }
+
+    const priceSol =
+      token.priceUsd && solPriceUsd ? token.priceUsd / solPriceUsd : null;
+
+    fills = rows
+      .map((row) => ({
+        time: Math.round(Date.parse(row.created_at) / 1000),
+        side: row.side,
+        solAmount: Number(row.sol_amount),
+      }))
+      .filter((fill) => Number.isFinite(fill.time) && fill.time > 0)
+      .slice(-40);
+
+    if (investedSol > 0) {
+      // Fills exist: the true round trip is what came back plus what is still
+      // held, minus everything that went in.
+      positionStats = {
+        investedSol,
+        soldSol,
+        remainingSol: priceSol ? position.tokens * priceSol : 0,
+        pnlSol: 0,
+        pnlPct: 0,
+      };
+      positionStats.pnlSol =
+        positionStats.remainingSol + soldSol - investedSol;
+      positionStats.pnlPct = (positionStats.pnlSol / investedSol) * 100;
     }
   }
 
-  const changeTone = toneForPnl(token.change1hPct);
+  const avgEntryPriceUsd =
+    position.tokens > 0 && solPriceUsd
+      ? (position.costSol / position.tokens) * solPriceUsd
+      : null;
 
   return (
     <div className="space-y-5">
@@ -119,12 +184,11 @@ export default async function CoinPage({ params }: CoinPageProps) {
         </div>
 
         <div className="text-right">
-          <p className="num text-[26px] font-bold leading-none">
-            {formatUsdPrice(token.priceUsd)}
-          </p>
-          <p className={cn("num mt-1.5 text-[13px] font-semibold", changeTone)}>
-            {formatPct(token.change1hPct)} · 1h
-          </p>
+          <LivePrice
+            mint={token.mint}
+            initialPriceUsd={token.priceUsd}
+            initialChange1hPct={token.change1hPct}
+          />
         </div>
       </div>
 
@@ -171,9 +235,13 @@ export default async function CoinPage({ params }: CoinPageProps) {
         <Card className="flex min-w-0 flex-col overflow-hidden">
           <CardHeader
             title="Chart"
-            subtitle="Live candles from the pool. Refreshes every 20s."
+            subtitle="Live candles from the pool, ticking every second."
           />
-          <PriceChart mint={token.mint} />
+          <PriceChart
+            mint={token.mint}
+            avgEntryPriceUsd={avgEntryPriceUsd}
+            fills={fills}
+          />
         </Card>
 
         <Card className="flex flex-col">
@@ -183,15 +251,16 @@ export default async function CoinPage({ params }: CoinPageProps) {
           />
           <div className="flex flex-1 flex-col p-5">
             <TradePanel
-              mint={token.mint}
-              symbol={token.symbol}
+              token={token}
               solBalance={account?.solBalance ?? 0}
               positionTokens={position.tokens}
               positionCostSol={position.costSol}
-              priceUsd={token.priceUsd}
+              positionStats={positionStats}
               solPriceUsd={solPriceUsd}
               accounts={ctx?.accounts ?? []}
               activeAccountId={account?.id ?? null}
+              feeBps={swapFeeBps()}
+              priorityFeeSol={priorityFeeSol()}
             />
           </div>
         </Card>
