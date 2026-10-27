@@ -42,9 +42,11 @@ export async function fetchPools(path: string): Promise<GtPool[] | null> {
     const response = await fetch(`${BASE_URL}${path}`, {
       headers: { accept: "application/json" },
       signal: AbortSignal.timeout(TIMEOUT_MS),
-      // The in-memory memo in cache.ts already collapses requests; this is a
-      // second layer so a cold serverless instance does not fan out.
-      next: { revalidate: 20 },
+      // The in-memory memo in cache.ts already collapses requests. A second,
+      // platform-level cache here used to outlive every TTL we control and pin
+      // a board to a minutes-old snapshot, so the fetch stays uncached and the
+      // memo is the only thing deciding freshness.
+      cache: "no-store",
     });
 
     if (!response.ok) return null;
@@ -78,7 +80,9 @@ export async function fetchCandles(
       {
         headers: { accept: "application/json" },
         signal: AbortSignal.timeout(TIMEOUT_MS),
-        next: { revalidate: 15 },
+        // Same reasoning as fetchPools: the TTL that decides how old a candle
+        // may be lives in the route, not in an opaque platform cache.
+        cache: "no-store",
       },
     );
 
@@ -90,14 +94,21 @@ export async function fetchCandles(
     const list = body.data?.attributes?.ohlcv_list;
     if (!Array.isArray(list)) return null;
 
-    return list
+    const candles = list
       .map((row): Candle | null => {
         const [time, open, high, low, close, volume] = row;
         if (![time, open, high, low, close].every(Number.isFinite)) return null;
         return { time, open, high, low, close, volume: volume ?? 0 };
       })
-      .filter((candle): candle is Candle => candle !== null)
-      .sort((a, b) => a.time - b.time);
+      .filter((candle): candle is Candle => candle !== null);
+
+    // The ohlcv feed occasionally repeats the still-forming bucket, and the
+    // chart rejects duplicate timestamps outright (setData throws, leaving an
+    // empty plot). Keep the latest copy of each bucket, in time order.
+    const byTime = new Map<number, Candle>();
+    for (const candle of candles) byTime.set(candle.time, candle);
+
+    return [...byTime.values()].sort((a, b) => a.time - b.time);
   } catch {
     return null;
   }

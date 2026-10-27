@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { TokenAvatar } from "@/components/discover/token-avatar";
+import type { LivePriceTick } from "@/lib/market/live-prices";
 import type { MarketToken } from "@/lib/market/types";
 import {
   cn,
@@ -17,22 +18,31 @@ export function TokenRow({
   token,
   variant,
   nowMs,
+  livePrice,
   isNew = false,
   enterDelayMs = 0,
 }: {
   token: MarketToken;
   variant: TokenRowVariant;
   nowMs: number;
+  /** Latest tick for this coin, when the board has one (it updates each 1s). */
+  livePrice?: LivePriceTick;
   /** Appeared in the latest refresh — flashes once so the update is visible. */
   isNew?: boolean;
   /** Staggers the entrance so a column fills coin by coin. */
   enterDelayMs?: number;
 }) {
+  // The board snapshot is the slow-moving half (columns, curve progress); the
+  // price and its 1h change come from the tick stream so the row still breathes
+  // between rebuilds.
+  const priceUsd = livePrice?.priceUsd ?? token.priceUsd;
+  const change1hPct = livePrice?.change1hPct ?? token.change1hPct;
+
   const fdv = formatCompactUsd(token.fdvUsd);
   const volume1h = formatCompactUsd(token.volume1hUsd);
   const volume24h = formatCompactUsd(token.volume24hUsd);
-  const change = formatPct(token.change1hPct);
-  const changeTone = toneForPnl(token.change1hPct);
+  const change = formatPct(change1hPct);
+  const changeTone = toneForPnl(change1hPct);
   const curve =
     token.curveProgressPct !== null
       ? `${Math.round(token.curveProgressPct)}% curve`
@@ -41,7 +51,7 @@ export function TokenRow({
   // A coin minutes off the curve has no market cap yet, so showing "$0" tells
   // nobody anything — its price is the number that actually exists.
   const launchPrice =
-    !token.fdvUsd && token.priceUsd ? formatUsdPrice(token.priceUsd) : fdv;
+    !token.fdvUsd && priceUsd ? formatUsdPrice(priceUsd) : fdv;
 
   const primary =
     variant === "trending"
