@@ -86,12 +86,21 @@ export function quoteTrade({
   side,
   solAmount,
   tokenAmount,
+  feeBps,
+  priorityFee,
 }: {
   token: MarketToken;
   solPriceUsd: number | null;
   side: TradeSide;
   solAmount?: number;
   tokenAmount?: number;
+  /**
+   * Fee overrides. The panel prices its preview in the browser from the same
+   * maths, and the browser cannot read the server's env, so the page passes the
+   * values down. Server-side calls omit them and read the configuration.
+   */
+  feeBps?: number;
+  priorityFee?: number;
 }): TradeQuote {
   if (!solPriceUsd || solPriceUsd <= 0) {
     throw new QuoteError("SOL price is unavailable right now — try again.");
@@ -101,8 +110,8 @@ export function quoteTrade({
   }
 
   const priceSol = token.priceUsd / solPriceUsd;
-  const feeRate = swapFeeBps() / 10_000;
-  const priority = priorityFeeSol();
+  const feeRate = (feeBps ?? swapFeeBps()) / 10_000;
+  const priority = priorityFee ?? priorityFeeSol();
   const { sol: reserveSol, tokens: reserveTokens } = reservesFor(
     token,
     priceSol,
