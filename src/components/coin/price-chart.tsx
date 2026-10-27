@@ -4,12 +4,20 @@ import {
   CandlestickSeries,
   ColorType,
   createChart,
+  createSeriesMarkers,
+  LineStyle,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type SeriesMarker,
+  type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useLivePrices } from "@/lib/market/live-prices";
+import { useTradeSettings } from "@/lib/trade/settings";
 import { cn } from "@/lib/utils";
 
 type Candle = {
@@ -21,11 +29,34 @@ type Candle = {
   volume: number;
 };
 
+/** One of the signed-in account's own fills on this coin. */
+export type ChartFill = {
+  time: number;
+  side: "buy" | "sell";
+  /** SOL in (buy) or SOL out (sell), labelled on the marker. */
+  solAmount: number;
+};
+
 const TIMEFRAMES = ["1m", "5m", "15m", "1h"] as const;
 type Timeframe = (typeof TIMEFRAMES)[number];
 
+/** Width of one bar, so a live price can be slotted into the right bucket. */
+const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
+  "1m": 60,
+  "5m": 300,
+  "15m": 900,
+  "1h": 3_600,
+};
+
 const UP = "#3ddc97";
 const DOWN = "#ff8a4c";
+
+/**
+ * Roughly the width of a marker caption. Two fills closer together than this
+ * would print their sizes on top of each other, so only the newer one keeps its
+ * label — zooming in spreads the bars out and the labels come back.
+ */
+const LABEL_MIN_GAP_PX = 52;
 
 function priceFormatFor(candles: Candle[]) {
   const max = candles.reduce((best, candle) => Math.max(best, candle.high), 0);
@@ -37,16 +68,174 @@ function priceFormatFor(candles: Candle[]) {
   };
 }
 
-export function PriceChart({ mint }: { mint: string }) {
+/**
+ * The bar a fill belongs on.
+ *
+ * The OHLCV feed only publishes a bucket once it has trades in it, so the last
+ * bar is regularly a minute behind the clock. A fill that just executed is
+ * therefore *newer* than every loaded bar — clamping it onto the newest bar is
+ * what keeps a fresh fill visible; it slides to its real bucket as the feed and
+ * the live ticker extend the series. Fills older than the loaded window are the
+ * only ones dropped.
+ */
+function snapToCandle(candles: Candle[], time: number): number | null {
+  if (!candles.length) return null;
+
+  const first = candles[0].time;
+  const last = candles[candles.length - 1].time;
+  if (time < first) return null;
+
+  const target = Math.min(time, last);
+  let best = last;
+  let bestGap = Math.abs(best - target);
+  for (const candle of candles) {
+    const gap = Math.abs(candle.time - target);
+    if (gap < bestGap) {
+      best = candle.time;
+      bestGap = gap;
+    }
+  }
+  return best;
+}
+
+/**
+ * The chart paints on a canvas, so it needs a real font family string rather
+ * than a CSS variable. Reading the computed family off a throwaway `.num`
+ * element picks up the app's own webfont — the axis labels and marker labels
+ * then match the rest of the terminal instead of whatever system monospace the
+ * browser happens to resolve, which on some machines is nothing at all.
+ */
+function chartFontFamily(container: HTMLElement) {
+  const probe = document.createElement("span");
+  probe.className = "num";
+  probe.style.cssText =
+    "position:absolute;visibility:hidden;pointer-events:none;white-space:nowrap";
+  container.appendChild(probe);
+  const family = getComputedStyle(probe).fontFamily;
+  probe.remove();
+
+  return family && family !== ""
+    ? family
+    : "ui-monospace, SFMono-Regular, monospace";
+}
+
+/** Short SOL figure for a marker label: 0.2, 1.5, 24. */
+function solLabel(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value >= 100) return String(Math.round(value));
+  if (value >= 1) return value.toFixed(1).replace(/\.0$/, "");
+  return value.toFixed(2).replace(/0$/, "");
+}
+
+export function PriceChart({
+  mint,
+  avgEntryPriceUsd = null,
+  fills = [],
+}: {
+  mint: string;
+  /** Dashed line showing where this account got in. */
+  avgEntryPriceUsd?: number | null;
+  /** Own fills, drawn as arrows on their candle. */
+  fills?: ChartFill[];
+}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const fittedRef = useRef<string | null>(null);
+  const priceLineRef = useRef<IPriceLine | null>(null);
+  const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const candlesRef = useRef<Candle[]>([]);
+
+  const { settings } = useTradeSettings();
 
   const [timeframe, setTimeframe] = useState<Timeframe>("1m");
   const [status, setStatus] = useState<"loading" | "ready" | "empty" | "error">(
     "loading",
   );
+  const livePrice = useLivePrices([mint])[mint]?.priceUsd ?? null;
+  // Bumped on every candle load so marker placement can re-run against fresh
+  // bar times without refetching anything.
+  const [dataVersion, setDataVersion] = useState(0);
+
+  const fillsRef = useRef<ChartFill[]>(fills);
+  const markersOnRef = useRef(settings.chartMarkers);
+
+  /**
+   * Own fills, drawn on the bars they happened in. Runs on every candle load, a
+   * new bar, a zoom, and a new fill, so an arrow never points at a bar that has
+   * scrolled out of the series.
+   */
+  const placeMarkers = useCallback(() => {
+    const markers = markersRef.current;
+    if (!markers) return;
+
+    const candles = candlesRef.current;
+    if (!markersOnRef.current || !candles.length || !fillsRef.current.length) {
+      markers.setMarkers([]);
+      return;
+    }
+
+    const indexOfBar = new Map<number, number>();
+    candles.forEach((candle, index) => indexOfBar.set(candle.time, index));
+    const barSpacing = chartRef.current?.timeScale().options().barSpacing ?? 6;
+
+    // Several fills can land in one bar (a scale-in, or a buy and a sell in the
+    // same minute). One marker per bar per side, carrying the total size, keeps
+    // a busy minute readable instead of stacking arrows — buys sit under the
+    // bar and sells above it, so the two never collide.
+    const byBar = new Map<
+      string,
+      { time: number; side: "buy" | "sell"; count: number; sol: number }
+    >();
+
+    for (const fill of fillsRef.current) {
+      const time = snapToCandle(candles, fill.time);
+      if (time === null) continue;
+
+      const sol = Number.isFinite(fill.solAmount) ? Math.abs(fill.solAmount) : 0;
+      const key = `${time}:${fill.side}`;
+      const bucket = byBar.get(key) ?? { time, side: fill.side, count: 0, sol: 0 };
+      bucket.count += 1;
+      bucket.sol += sol;
+      byBar.set(key, bucket);
+    }
+
+    const buckets = [...byBar.values()].sort((a, b) => a.time - b.time);
+
+    // Walk newest first, so the freshest fill is the one that keeps its caption
+    // when two of them are packed too tightly to label both.
+    const labelledAt: Record<"buy" | "sell", number | null> = {
+      buy: null,
+      sell: null,
+    };
+    const next: SeriesMarker<Time>[] = [];
+
+    for (let index = buckets.length - 1; index >= 0; index -= 1) {
+      const bucket = buckets[index];
+      const bar = indexOfBar.get(bucket.time) ?? 0;
+      const previous = labelledAt[bucket.side];
+      const roomForLabel =
+        previous === null ||
+        Math.abs(bar - previous) * barSpacing >= LABEL_MIN_GAP_PX;
+      if (roomForLabel) labelledAt[bucket.side] = bar;
+
+      const size = solLabel(bucket.sol);
+      const order = bucket.count > 1 ? `×${bucket.count} ` : "";
+
+      next.push({
+        time: bucket.time as UTCTimestamp,
+        position: bucket.side === "buy" ? "belowBar" : "aboveBar",
+        color: bucket.side === "buy" ? UP : DOWN,
+        shape: bucket.side === "buy" ? "arrowUp" : "arrowDown",
+        text: roomForLabel
+          ? `${order}${bucket.side === "buy" ? "B" : "S"}${size ? ` ${size}` : ""}`
+          : undefined,
+      } satisfies SeriesMarker<Time>);
+    }
+
+    // The plugin wants markers in ascending time order.
+    markers.setMarkers(next.reverse());
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -58,7 +247,7 @@ export function PriceChart({ mint }: { mint: string }) {
         background: { type: ColorType.Solid, color: "transparent" },
         textColor: "#7d8694",
         fontSize: 10,
-        fontFamily: "ui-monospace, SFMono-Regular, monospace",
+        fontFamily: chartFontFamily(container),
         attributionLogo: false,
       },
       grid: {
@@ -90,13 +279,23 @@ export function PriceChart({ mint }: { mint: string }) {
 
     chartRef.current = chart;
     seriesRef.current = series;
+    markersRef.current = createSeriesMarkers(series, []);
+
+    // Zooming changes how much room a caption has, so labels are re-decided
+    // whenever the visible range moves.
+    const onRangeChange = () => placeMarkers();
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onRangeChange);
 
     return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRangeChange);
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      markersRef.current = null;
+      priceLineRef.current = null;
+      candlesRef.current = [];
     };
-  }, []);
+  }, [placeMarkers]);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,6 +317,27 @@ export function PriceChart({ mint }: { mint: string }) {
           setStatus("empty");
           return true;
         }
+
+        // Skip the redraw when the feed has nothing new. Beyond saving a
+        // full-series redraw every few seconds, this is what stops the chart
+        // from snapping backwards over the bar the live ticker is shaping.
+        const previous = candlesRef.current;
+        const previousLast = previous[previous.length - 1];
+        const incomingLast = body.candles[body.candles.length - 1];
+
+        if (previousLast) {
+          const unchanged =
+            previous.length === body.candles.length &&
+            previousLast.time === incomingLast.time &&
+            previousLast.close === incomingLast.close &&
+            previousLast.high === incomingLast.high &&
+            previousLast.low === incomingLast.low;
+
+          if (unchanged || previousLast.time > incomingLast.time) return true;
+        }
+
+        candlesRef.current = body.candles;
+        setDataVersion((current) => current + 1);
 
         seriesRef.current.applyOptions({
           priceFormat: priceFormatFor(body.candles),
@@ -153,7 +373,7 @@ export function PriceChart({ mint }: { mint: string }) {
       const ok = await load();
       if (cancelled) return;
       if (ok) retryMs = 5_000;
-      timer = window.setTimeout(schedule, ok ? 20_000 : retryMs);
+      timer = window.setTimeout(schedule, ok ? 5_000 : retryMs);
       if (!ok) retryMs = Math.min(retryMs * 2, 30_000);
     };
 
@@ -164,6 +384,94 @@ export function PriceChart({ mint }: { mint: string }) {
       if (timer) window.clearTimeout(timer);
     };
   }, [mint, timeframe]);
+
+  // Live tick. The newest bar is rebuilt from the streaming price once a second
+  // and written with `update`, which touches one bar instead of replacing the
+  // series — the viewport, scroll position and crosshair all survive it.
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series || !livePrice || livePrice <= 0) return;
+
+    const candles = candlesRef.current;
+    const last = candles[candles.length - 1];
+    if (!last) return;
+
+    const span = TIMEFRAME_SECONDS[timeframe];
+    const bucket = Math.floor(Date.now() / 1_000 / span) * span;
+    if (bucket < last.time) return;
+
+    const appended = bucket !== last.time;
+    const next: Candle = appended
+      ? {
+          time: bucket,
+          open: last.close,
+          high: Math.max(last.close, livePrice),
+          low: Math.min(last.close, livePrice),
+          close: livePrice,
+          volume: 0,
+        }
+      : {
+          ...last,
+          close: livePrice,
+          high: Math.max(last.high, livePrice),
+          low: Math.min(last.low, livePrice),
+        };
+
+    candlesRef.current = appended
+      ? [...candles, next]
+      : [...candles.slice(0, -1), next];
+
+    try {
+      series.update({ ...next, time: next.time as UTCTimestamp });
+    } catch {
+      // A rejected timestamp (clock skew) is not worth breaking the chart over;
+      // the next poll restores real data.
+      return;
+    }
+
+    // Markers snap to bar times, so they only need re-placing when a bar is
+    // actually added — not on every tick inside one.
+    if (appended) setDataVersion((current) => current + 1);
+  }, [livePrice, timeframe]);
+
+  // Avg-entry line. Recreated whenever the entry or the toggle changes; a price
+  // line is cheap, so there is no reason to mutate it in place.
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+
+    if (priceLineRef.current) {
+      series.removePriceLine(priceLineRef.current);
+      priceLineRef.current = null;
+    }
+
+    if (!settings.chartMarkers || !avgEntryPriceUsd || avgEntryPriceUsd <= 0) {
+      return;
+    }
+
+    priceLineRef.current = series.createPriceLine({
+      price: avgEntryPriceUsd,
+      color: "rgba(61, 220, 151, 0.75)",
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      lineVisible: true,
+      axisLabelVisible: true,
+      title: "Avg entry",
+    });
+  }, [avgEntryPriceUsd, settings.chartMarkers]);
+
+  // A new fill, the toggle, or a fresh bar all change what belongs on the
+  // chart. Fills older than the loaded window are simply not drawn: a 1m chart
+  // only holds a couple of hours, and inventing a bar for them would lie.
+  useEffect(() => {
+    fillsRef.current = fills;
+    markersOnRef.current = settings.chartMarkers;
+    placeMarkers();
+  }, [fills, settings.chartMarkers, placeMarkers]);
+
+  useEffect(() => {
+    placeMarkers();
+  }, [dataVersion, placeMarkers]);
 
   return (
     <div className="flex flex-1 flex-col">
@@ -189,7 +497,13 @@ export function PriceChart({ mint }: { mint: string }) {
             </button>
           ))}
         </div>
-        <span className="text-[10px] font-bold uppercase tracking-wider text-muted">
+        <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted">
+          {status === "ready" ? (
+            <span
+              aria-hidden
+              className="size-1.5 animate-pulse rounded-full bg-up"
+            />
+          ) : null}
           {status === "ready" ? "Live candles" : status === "empty" ? "No candles" : status === "error" ? "Feed offline" : "Loading"}
         </span>
       </div>
