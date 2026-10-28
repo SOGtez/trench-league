@@ -143,4 +143,95 @@
   .board-column {
     height: calc(100vh - 27rem);
   }
+
+  /*
+ * The coin terminal fills everything under the 4rem app header. Plain CSS for
+ * the same reason as the board column: Tailwind will not emit an arbitrary
+ * calc() of this shape, and a fixed height is what lets the chart pane, the
+ * tape and the blotter scroll inside the frame instead of stretching it.
+ */
+  .coin-terminal {
+    height: calc(100vh - 4rem);
+  }
+}
+
+/* Full-screen mode from the tool rail. */
+.coin-terminal-full {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  height: 100vh;
+  background-color: var(--color-bg);
+}
+
+/* One button in the terminal's left rail. */
+.rail-button {
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 6px;
+  color: var(--color-muted);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.rail-button:hover {
+  background-color: var(--color-hover);
+  color: var(--color-ink);
+}
+
+/* Blotter rows share one column template between the header and the data. */
+.blotter-row {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.1fr)
+    minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.3rem 0.75rem;
+  border-bottom: 1px solid rgb(35 39 46 / 0.45);
+}
+
+/* Size slider in the ticket: thin track, small handle, no browser chrome. */
+.trade-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.trade-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.trade-slider::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--color-line-strong);
+}
+
+.trade-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  margin-top: -4px;
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  border: 2px solid var(--color-bg);
+  background: var(--color-ink);
+}
+
+.trade-slider::-moz-range-track {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--color-line-strong);
+}
+
+.trade-slider::-moz-range-thumb {
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--color-bg);
+  border-radius: 999px;
+  background: var(--color-ink);
 }
