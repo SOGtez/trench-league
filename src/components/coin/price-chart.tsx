@@ -5,6 +5,7 @@ import {
   ColorType,
   createChart,
   createSeriesMarkers,
+  HistogramSeries,
   LineStyle,
   type IChartApi,
   type IPriceLine,
@@ -18,7 +19,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useLivePrices } from "@/lib/market/live-prices";
 import { useTradeSettings } from "@/lib/trade/settings";
-import { cn } from "@/lib/utils";
+import { cn, formatPct } from "@/lib/utils";
 
 type Candle = {
   time: number;
@@ -119,6 +120,12 @@ function chartFontFamily(container: HTMLElement) {
     : "ui-monospace, SFMono-Regular, monospace";
 }
 
+/** Header readout: memecoins need significant digits, not fixed decimals. */
+function ohlcPrice(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "—";
+  return value >= 1 ? value.toFixed(2) : value.toPrecision(4);
+}
+
 /** Short SOL figure for a marker label: 0.2, 1.5, 24. */
 function solLabel(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "";
@@ -129,10 +136,15 @@ function solLabel(value: number) {
 
 export function PriceChart({
   mint,
+  symbol,
+  dex,
   avgEntryPriceUsd = null,
   fills = [],
 }: {
   mint: string;
+  /** Shown in the chart's title row, like a terminal's instrument label. */
+  symbol?: string;
+  dex?: string;
   /** Dashed line showing where this account got in. */
   avgEntryPriceUsd?: number | null;
   /** Own fills, drawn as arrows on their candle. */
@@ -141,6 +153,7 @@ export function PriceChart({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const fittedRef = useRef<string | null>(null);
   const priceLineRef = useRef<IPriceLine | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
@@ -152,6 +165,9 @@ export function PriceChart({
   const [status, setStatus] = useState<"loading" | "ready" | "empty" | "error">(
     "loading",
   );
+  // Mirrors the newest bar for the header readout; the canvas paint is the
+  // series' own job, this is only the numbers beside the instrument name.
+  const [lastCandle, setLastCandle] = useState<Candle | null>(null);
   const livePrice = useLivePrices([mint])[mint]?.priceUsd ?? null;
   // Bumped on every candle load so marker placement can re-run against fresh
   // bar times without refetching anything.
@@ -277,8 +293,21 @@ export function PriceChart({
       priceFormat: priceFormatFor([]),
     });
 
+    // Volume sits in the bottom fifth of the plot, on its own invisible scale,
+    // so price keeps the full height it would have had without it.
+    const volume = chart.addSeries(HistogramSeries, {
+      priceFormat: { type: "volume" },
+      priceScaleId: "volume",
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    chart.priceScale("volume").applyOptions({
+      scaleMargins: { top: 0.82, bottom: 0 },
+    });
+
     chartRef.current = chart;
     seriesRef.current = series;
+    volumeRef.current = volume;
     markersRef.current = createSeriesMarkers(series, []);
 
     // Zooming changes how much room a caption has, so labels are re-decided
@@ -291,6 +320,7 @@ export function PriceChart({
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      volumeRef.current = null;
       markersRef.current = null;
       priceLineRef.current = null;
       candlesRef.current = [];
@@ -338,6 +368,7 @@ export function PriceChart({
 
         candlesRef.current = body.candles;
         setDataVersion((current) => current + 1);
+        setLastCandle(incomingLast);
 
         seriesRef.current.applyOptions({
           priceFormat: priceFormatFor(body.candles),
@@ -349,6 +380,17 @@ export function PriceChart({
             high: candle.high,
             low: candle.low,
             close: candle.close,
+          })),
+        );
+
+        volumeRef.current?.setData(
+          body.candles.map((candle) => ({
+            time: candle.time as UTCTimestamp,
+            value: candle.volume,
+            color:
+              candle.close >= candle.open
+                ? "rgba(61, 220, 151, 0.28)"
+                : "rgba(255, 138, 76, 0.28)",
           })),
         );
 
@@ -421,8 +463,17 @@ export function PriceChart({
       ? [...candles, next]
       : [...candles.slice(0, -1), next];
 
+    setLastCandle(next);
+
     try {
       series.update({ ...next, time: next.time as UTCTimestamp });
+      if (appended) {
+        volumeRef.current?.update({
+          time: next.time as UTCTimestamp,
+          value: 0,
+          color: "rgba(61, 220, 151, 0.28)",
+        });
+      }
     } catch {
       // A rejected timestamp (clock skew) is not worth breaking the chart over;
       // the next poll restores real data.
@@ -473,43 +524,56 @@ export function PriceChart({
     placeMarkers();
   }, [dataVersion, placeMarkers]);
 
+  const barChange =
+    lastCandle && lastCandle.open > 0
+      ? ((lastCandle.close - lastCandle.open) / lastCandle.open) * 100
+      : null;
+
   return (
-    <div className="flex flex-1 flex-col">
-      <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
-        <div className="flex items-center gap-1">
-          {TIMEFRAMES.map((option) => (
-            <button
-              key={option}
-              type="button"
-              onClick={() => {
-                setTimeframe(option);
-                setStatus("loading");
-              }}
-              aria-pressed={option === timeframe}
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* Instrument row: name, the newest bar's OHLC, and how fresh the feed
+          is. The numbers come from the same candle the canvas is drawing. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-3 py-2">
+        <span className="text-[11px] font-bold text-ink">
+          {symbol ?? mint.slice(0, 6)}
+          {dex ? <span className="font-medium text-muted"> · {dex}</span> : null}
+        </span>
+
+        <div className="num flex items-center gap-x-2.5 text-[10px] text-muted">
+          <span>
+            O <span className="text-soft">{ohlcPrice(lastCandle?.open ?? 0)}</span>
+          </span>
+          <span>
+            H <span className="text-soft">{ohlcPrice(lastCandle?.high ?? 0)}</span>
+          </span>
+          <span>
+            L <span className="text-soft">{ohlcPrice(lastCandle?.low ?? 0)}</span>
+          </span>
+          <span>
+            C <span className="text-ink">{ohlcPrice(lastCandle?.close ?? 0)}</span>
+          </span>
+          {barChange !== null ? (
+            <span
               className={cn(
-                "h-7 rounded-full px-2.5 text-[11px] font-bold uppercase tracking-wide transition-colors",
-                option === timeframe
-                  ? "bg-active text-ink"
-                  : "text-muted hover:bg-hover hover:text-soft",
+                "font-semibold",
+                barChange >= 0 ? "text-up" : "text-down",
               )}
             >
-              {option}
-            </button>
-          ))}
-        </div>
-        <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted">
-          {status === "ready" ? (
-            <span
-              aria-hidden
-              className="size-1.5 animate-pulse rounded-full bg-up"
-            />
+              {formatPct(barChange, 2)}
+            </span>
           ) : null}
-          {status === "ready" ? "Live candles" : status === "empty" ? "No candles" : status === "error" ? "Feed offline" : "Loading"}
+        </div>
+
+        <span className="ml-auto inline-flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wider text-muted">
+          {status === "ready" ? (
+            <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-up" />
+          ) : null}
+          {status === "ready" ? "1s ticks" : status === "empty" ? "no candles" : status === "error" ? "offline" : "loading"}
         </span>
       </div>
 
-      {/* Grows to fill the card so a tall trade panel does not leave a dead
-          band under the chart; autoSize redraws on every resize. */}
+      {/* Grows to fill its pane so the chart keeps the height the layout gives
+          it; autoSize redraws on every resize. */}
       <div className="relative min-h-[320px] flex-1 sm:min-h-[380px]">
         <div ref={containerRef} className="absolute inset-0" />
         {status !== "ready" ? (
@@ -523,6 +587,44 @@ export function PriceChart({
             </p>
           </div>
         ) : null}
+      </div>
+
+      {/* Bottom rail, terminal-style: resolution on the left, viewport
+          controls on the right. */}
+      <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-t border-line px-2">
+        <div className="flex items-center gap-0.5">
+          {TIMEFRAMES.map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => {
+                setTimeframe(option);
+                setStatus("loading");
+              }}
+              aria-pressed={option === timeframe}
+              className={cn(
+                "h-6 rounded-[6px] px-2 text-[10px] font-bold uppercase tracking-wide transition-colors",
+                option === timeframe
+                  ? "bg-active text-ink"
+                  : "text-muted hover:bg-hover hover:text-soft",
+              )}
+            >
+              {option}
+            </button>
+          ))}
+          <span aria-hidden className="mx-1 h-4 w-px bg-line" />
+          <button
+            type="button"
+            onClick={() => chartRef.current?.timeScale().fitContent()}
+            title="Fit all loaded candles in view"
+            className="h-6 rounded-[6px] px-2 text-[10px] font-bold uppercase tracking-wide text-muted transition-colors hover:bg-hover hover:text-soft"
+          >
+            Fit
+          </button>
+        </div>
+        <span className="num pr-1 text-[9px] font-semibold uppercase tracking-wider text-muted/70">
+          {TIMEFRAMES.includes(timeframe) ? `${timeframe} candles` : timeframe}
+        </span>
       </div>
     </div>
   );
