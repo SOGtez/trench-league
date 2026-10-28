@@ -114,6 +114,97 @@ export async function fetchCandles(
   }
 }
 
+/**
+ * One print off the pool's tape.
+ *
+ * GeckoTerminal describes every trade from the pool's perspective: a buy is
+ * SOL in and token out, so the token's USD price is `price_to_in_usd`; a sell is
+ * the mirror image and carries it in `price_from_in_usd`. Reading the wrong
+ * side is what would print the price of SOL on a sell row.
+ */
+export type PoolTrade = {
+  /** Unix seconds, matching the chart's bar times. */
+  ts: number;
+  side: "buy" | "sell";
+  priceUsd: number | null;
+  volumeUsd: number | null;
+  tokenAmount: number | null;
+  wallet: string | null;
+  txHash: string;
+};
+
+type GtTrade = {
+  attributes?: {
+    block_timestamp?: string | null;
+    kind?: string | null;
+    tx_hash?: string | null;
+    tx_from_address?: string | null;
+    from_token_amount?: string | null;
+    to_token_amount?: string | null;
+    price_from_in_usd?: string | null;
+    price_to_in_usd?: string | null;
+    volume_in_usd?: string | null;
+  };
+};
+
+/** The newest prints on a pool, newest first. */
+export async function fetchTrades(
+  poolAddress: string,
+  limit = 40,
+): Promise<PoolTrade[] | null> {
+  try {
+    const response = await fetch(
+      `${BASE_URL}/networks/solana/pools/${encodeURIComponent(poolAddress)}/trades`,
+      {
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        cache: "no-store",
+      },
+    );
+
+    if (!response.ok) return null;
+
+    const body = (await response.json()) as { data?: GtTrade[] };
+    if (!Array.isArray(body.data)) return null;
+
+    const trades: PoolTrade[] = [];
+    for (const entry of body.data) {
+      const attributes = entry.attributes;
+      const txHash = attributes?.tx_hash;
+      const side = attributes?.kind === "buy" ? "buy" : "sell";
+      const ts = attributes?.block_timestamp
+        ? Math.round(Date.parse(attributes.block_timestamp) / 1_000)
+        : Number.NaN;
+
+      if (!txHash || !Number.isFinite(ts)) continue;
+
+      trades.push({
+        ts,
+        side,
+        priceUsd: numeric(
+          side === "buy"
+            ? attributes?.price_to_in_usd
+            : attributes?.price_from_in_usd,
+        ),
+        volumeUsd: numeric(attributes?.volume_in_usd),
+        tokenAmount: numeric(
+          side === "buy"
+            ? attributes?.to_token_amount
+            : attributes?.from_token_amount,
+        ),
+        wallet: attributes?.tx_from_address ?? null,
+        txHash,
+      });
+    }
+
+    // The endpoint answers oldest-last but not strictly sorted, and a busy pool
+    // can push a print across pages; sorting here keeps the tape monotonic.
+    return trades.sort((a, b) => b.ts - a.ts).slice(0, limit);
+  } catch {
+    return null;
+  }
+}
+
 function relationshipId(
   relationship: { data?: { id?: string } } | undefined,
 ): string | null {
