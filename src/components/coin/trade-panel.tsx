@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 
@@ -8,7 +9,7 @@ import { FormError } from "@/components/auth/text-field";
 import { AccountSwitcher } from "@/components/league/account-switcher";
 import { PaperLabel } from "@/components/paper-label";
 import { TradeSettingsDialog } from "@/components/coin/trade-settings";
-import { Button } from "@/components/ui/button";
+import { Button, buttonStyles } from "@/components/ui/button";
 import { trackEvent } from "@/lib/analytics";
 import type { AccountSummary } from "@/lib/leagues/active-account";
 import { useLivePrices } from "@/lib/market/live-prices";
@@ -185,7 +186,10 @@ export function TradePanel({
     };
   }, [positionStats, positionTokens, priceSol]);
 
-  const overBalance = side === "buy" && amount > solBalance;
+  // A visitor without an account has no paper balance to be over, so the
+  // balance warning is suppressed and the submit becomes a login prompt.
+  const loggedOut = !activeAccountId;
+  const overBalance = side === "buy" && !loggedOut && amount > solBalance;
   const overPosition = side === "sell" && amount > positionTokens;
 
   // The slippage setting is a real veto, not decoration: the quote engine knows
@@ -196,6 +200,13 @@ export function TradePanel({
 
   const blocked =
     !validAmount || overBalance || overPosition || !!quoteError || overSlippage;
+
+  /** What 100% means for this side: the whole balance, or the whole position. */
+  const sizeBasis = side === "buy" ? solBalance : positionTokens;
+  const sliderPct =
+    sizeBasis > 0 && validAmount
+      ? Math.min(100, Math.max(0, Math.round((amount / sizeBasis) * 100)))
+      : 0;
 
   /** Sell enough tokens to get the invested SOL back at the current price. */
   const sellInitialAmount = useMemo(() => {
@@ -224,179 +235,208 @@ export function TradePanel({
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col gap-2 p-2">
       {accounts.length > 1 ? (
-        <div className="mb-3">
-          <AccountSwitcher
-            accounts={accounts}
-            activeId={activeAccountId}
-            variant="select"
-          />
-        </div>
+        <AccountSwitcher
+          accounts={accounts}
+          activeId={activeAccountId}
+          variant="select"
+        />
       ) : null}
 
-      <div className="flex items-center gap-1.5">
-        <div className="grid flex-1 grid-cols-2 gap-1 rounded-full border border-line bg-header p-1">
-          {(["buy", "sell"] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              onClick={() => switchSide(option)}
-              aria-pressed={side === option}
-              className={cn(
-                "h-9 rounded-full text-[13px] font-bold capitalize transition-colors",
-                side === option
-                  ? option === "buy"
-                    ? "bg-up text-[#04140d]"
-                    : "bg-down text-[#1a0c03]"
-                  : "text-muted hover:text-soft",
-              )}
-            >
-              {option}
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          onClick={() => setSettingsOpen(true)}
-          aria-label="Trade settings"
-          className="grid size-10 shrink-0 place-items-center rounded-full border border-line text-muted transition-colors hover:border-line-strong hover:text-ink"
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.9"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden
+      {/* Long/short toggle, the terminal's loudest control. */}
+      <div className="grid grid-cols-2 gap-1 rounded-[8px] border border-line bg-bg p-1">
+        {(["buy", "sell"] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => switchSide(option)}
+            aria-pressed={side === option}
+            className={cn(
+              "h-8 rounded-[6px] text-[12px] font-bold transition-colors",
+              side === option
+                ? option === "buy"
+                  ? "bg-up text-[#04140d]"
+                  : "bg-down text-[#1a0c03]"
+                : "text-muted hover:bg-hover hover:text-soft",
+            )}
           >
-            <circle cx="12" cy="12" r="3.2" />
-            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.06A1.7 1.7 0 0 0 8.9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.06A1.7 1.7 0 0 0 4.6 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 8.9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.06a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.06A1.7 1.7 0 0 0 19.4 15Z" />
-          </svg>
-        </button>
+            {option === "buy" ? "Buy" : "Sell"}
+          </button>
+        ))}
       </div>
 
-      <div className="mt-4 flex items-baseline justify-between">
+      {/* Order type and the settings that change what a fill costs. */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-0.5 text-[10px] font-bold uppercase tracking-wider">
+          <span
+            aria-current="true"
+            className="rounded-[5px] bg-active px-1.5 py-1 text-ink"
+          >
+            Market
+          </span>
+          <button
+            type="button"
+            disabled
+            title="Limit orders are not supported — every fill goes straight to the pool"
+            className="cursor-not-allowed rounded-[5px] px-1.5 py-1 text-muted/35"
+          >
+            Limit
+          </button>
+        </div>
+
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            title="Slippage tolerance — fills above it are refused"
+            className="rounded-full border border-line px-2 py-[3px] text-[10px] font-bold text-soft transition-colors hover:border-line-strong hover:text-ink"
+          >
+            Slippage {settings.slippagePct}%
+          </button>
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Trade settings"
+            className="grid size-6 place-items-center rounded-[6px] text-muted transition-colors hover:bg-hover hover:text-ink"
+          >
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <circle cx="12" cy="12" r="3.2" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.06A1.7 1.7 0 0 0 8.9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.06A1.7 1.7 0 0 0 4.6 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 8.9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.06a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.06A1.7 1.7 0 0 0 19.4 15Z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-baseline justify-between">
         <label
           htmlFor="trade-amount"
-          className="text-[11px] font-bold uppercase tracking-wider text-muted"
+          className="text-[10px] font-bold uppercase tracking-wider text-muted"
         >
-          {side === "buy" ? "Amount (SOL)" : "Amount (tokens)"}
+          {side === "buy" ? "Buy amount" : "Sell amount"}
         </label>
-        <span className="num text-[11px] text-muted">
+        <button
+          type="button"
+          onClick={() => updateAmount(String(sizeBasis || 0))}
+          disabled={sizeBasis <= 0}
+          className="num text-[10px] font-semibold text-muted transition-colors hover:text-ink disabled:cursor-not-allowed disabled:text-muted/50"
+          title="Use the whole balance"
+        >
           {side === "buy"
             ? `${formatSolAmount(solBalance)} SOL`
             : `${formatTokenAmount(positionTokens)} ${symbol}`}
+        </button>
+      </div>
+
+      <div className="relative">
+        <input
+          id="trade-amount"
+          inputMode="decimal"
+          value={amountInput}
+          onChange={(event) => updateAmount(event.target.value)}
+          placeholder={side === "buy" ? "0.5" : "0"}
+          className="num h-10 w-full rounded-[6px] border border-line bg-bg pl-2.5 pr-14 text-[14px] font-semibold text-ink placeholder:text-muted/60 focus:border-brand/60 focus:outline-none focus:ring-2 focus:ring-brand/20"
+        />
+        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-muted">
+          {side === "buy" ? "SOL" : symbol}
         </span>
       </div>
 
-      <input
-        id="trade-amount"
-        inputMode="decimal"
-        value={amountInput}
-        onChange={(event) => updateAmount(event.target.value)}
-        placeholder={side === "buy" ? "0.5" : "0"}
-        className="num mt-2 h-12 w-full rounded-[12px] border border-line bg-bg px-3.5 text-[15px] font-semibold text-ink placeholder:text-muted/60 focus:border-brand/60 focus:outline-none focus:ring-2 focus:ring-brand/20"
-      />
+      {/* One slider instead of a wall of chips: the size is continuous, and the
+          percentages underneath say what the handle is pointing at. */}
+      <div>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={sliderPct}
+          onChange={(event) => {
+            const pct = Number(event.target.value);
+            updateAmount(sizeBasis > 0 ? String((sizeBasis * pct) / 100) : "");
+          }}
+          disabled={sizeBasis <= 0}
+          aria-label={
+            side === "buy" ? "Percent of SOL balance" : "Percent of position"
+          }
+          className="trade-slider w-full"
+        />
+        <div className="num flex justify-between px-0.5 text-[9px] font-semibold text-muted/60">
+          {[0, 25, 50, 75, 100].map((mark) => (
+            <span key={mark}>{mark}</span>
+          ))}
+        </div>
+      </div>
 
-      {side === "buy" ? (
-        <div className="mt-2 grid grid-cols-4 gap-1.5">
-          {settings.buyAmounts.map((preset) => {
-            const unaffordable = preset > solBalance;
+      <div className="grid grid-cols-4 gap-1">
+        {(side === "buy"
+          ? settings.buyAmounts.slice(0, 4)
+          : settings.sellPercents).map(
+          (preset: number) => {
+            const unaffordable =
+              side === "buy"
+                ? preset > solBalance
+                : positionTokens <= 0;
+
             return (
               <button
                 key={preset}
                 type="button"
-                onClick={() => updateAmount(String(preset))}
+                onClick={() =>
+                  updateAmount(
+                    String(
+                      side === "buy"
+                        ? preset
+                        : (positionTokens * preset) / 100,
+                    ),
+                  )
+                }
                 disabled={unaffordable}
                 className={cn(
-                  "h-9 rounded-[10px] border border-line bg-card text-[12px] font-bold transition-colors",
+                  "h-6 rounded-[5px] border border-line bg-card text-[10px] font-bold transition-colors",
                   unaffordable
-                    ? "cursor-not-allowed text-muted/40"
-                    : "text-up hover:border-line-strong hover:bg-hover",
+                    ? "cursor-not-allowed text-muted/30"
+                    : side === "buy"
+                      ? "text-up hover:border-line-strong hover:bg-hover"
+                      : "text-down hover:border-line-strong hover:bg-hover",
                 )}
               >
-                {preset} SOL
+                {side === "buy" ? `${preset} SOL` : `${preset}%`}
               </button>
             );
-          })}
-        </div>
-      ) : (
-        <>
-          <div className="mt-2 grid grid-cols-4 gap-1.5">
-            {settings.sellPercents.map((preset) => (
-              <button
-                key={preset}
-                type="button"
-                onClick={() =>
-                  updateAmount(String((positionTokens * preset) / 100))
-                }
-                disabled={positionTokens <= 0}
-                className={cn(
-                  "h-9 rounded-[10px] border border-line bg-card text-[12px] font-bold transition-colors",
-                  positionTokens <= 0
-                    ? "cursor-not-allowed text-muted/40"
-                    : "text-down hover:border-line-strong hover:bg-hover",
-                )}
-              >
-                {preset}%
-              </button>
-            ))}
-          </div>
+          },
+        )}
+      </div>
 
-          <button
-            type="button"
-            onClick={() =>
-              sellInitialAmount && updateAmount(String(sellInitialAmount))
-            }
-            disabled={!sellInitialAmount}
-            title="Sell the part of your position that recovers your invested SOL"
-            className="mt-1.5 h-9 w-full rounded-[10px] border border-line bg-card text-[12px] font-semibold text-soft transition-colors hover:border-line-strong hover:bg-hover disabled:cursor-not-allowed disabled:text-muted/40"
-          >
-            Sell initial
-            {sellInitialAmount ? (
-              <span className="num ml-1.5 text-muted">
-                ({formatTokenAmount(sellInitialAmount)})
-              </span>
-            ) : null}
-          </button>
-        </>
-      )}
-
-      {side === "sell" && (positionTokens > 0 || stats.investedSol > 0) ? (
-        <dl className="mt-3 grid grid-cols-2 gap-1.5 rounded-[12px] border border-line bg-header p-1.5">
-          <StatCell
-            label="Invested"
-            value={`${formatSolAmount(stats.investedSol)} SOL`}
-          />
-          <StatCell
-            label="Sold"
-            value={
-              stats.soldSol > 0 ? `${formatSolAmount(stats.soldSol)} SOL` : "—"
-            }
-          />
-          <StatCell
-            label="Remaining"
-            value={`${formatSolAmount(stats.remainingSol)} SOL`}
-          />
-          <StatCell
-            label="PnL change"
-            value={`${formatPct(stats.pnlPct, 1)} · ${formatSolAmount(
-              Math.abs(stats.pnlSol),
-            )}`}
-            tone={toneForPnl(stats.pnlSol)}
-          />
-        </dl>
+      {side === "sell" && sellInitialAmount ? (
+        <button
+          type="button"
+          onClick={() => updateAmount(String(sellInitialAmount))}
+          title="Sell the part of your position that recovers your invested SOL"
+          className="h-6 w-full rounded-[5px] text-[10px] font-semibold text-muted transition-colors hover:bg-hover hover:text-ink"
+        >
+          Recover initial
+          <span className="num ml-1 text-muted/70">
+            ({formatTokenAmount(sellInitialAmount)})
+          </span>
+        </button>
       ) : null}
 
-      <div className="mt-4 rounded-[12px] border border-line bg-header px-3.5 py-3 text-[12px]">
+      <dl className="space-y-0.5 rounded-[6px] border border-line bg-header px-2.5 py-1.5 text-[11px]">
         {quote ? (
-          <dl className="space-y-1.5">
+          <>
             <QuoteRow
-              label={side === "buy" ? "You receive" : "You get"}
+              label="Receive"
               value={
                 side === "buy"
                   ? `${formatTokenAmount(quote.tokenAmount)} ${symbol}`
@@ -411,64 +451,103 @@ export function TradePanel({
               )}
             />
             <QuoteRow
-              label="Price impact"
+              label="Impact"
               value={formatPct(quote.impactPct * 100, 2)}
-              tone={overSlippage ? "text-down" : Math.abs(quote.impactPct) > 0.05 ? "text-down" : "text-soft"}
+              tone={
+                overSlippage
+                  ? "text-down"
+                  : Math.abs(quote.impactPct) > 0.05
+                    ? "text-down"
+                    : "text-soft"
+              }
             />
             <QuoteRow label="Fees" value={`${formatSolAmount(quote.feeSol)} SOL`} />
-          </dl>
+          </>
         ) : (
           <p className="text-muted">
             {quoteError ?? "Enter an amount to see the fill."}
           </p>
         )}
-      </div>
+      </dl>
+
+      {side === "sell" && (positionTokens > 0 || stats.investedSol > 0) ? (
+        <dl className="grid grid-cols-2 gap-1 rounded-[6px] border border-line bg-header p-1">
+          <StatCell
+            label="Invested"
+            value={`${formatSolAmount(stats.investedSol)}`}
+          />
+          <StatCell
+            label="Sold"
+            value={stats.soldSol > 0 ? `${formatSolAmount(stats.soldSol)}` : "—"}
+          />
+          <StatCell label="Remaining" value={formatSolAmount(stats.remainingSol)} />
+          <StatCell
+            label="PnL"
+            value={`${formatPct(stats.pnlPct, 1)} · ${formatSolAmount(
+              Math.abs(stats.pnlSol),
+            )}`}
+            tone={toneForPnl(stats.pnlSol)}
+          />
+        </dl>
+      ) : null}
 
       {overSlippage ? (
-        <p className="mt-2 text-[12px] font-semibold text-down">
+        <p className="text-[11px] font-semibold text-down">
           Price impact {formatPct(impactPct, 2)} is over your{" "}
-          {settings.slippagePct}% slippage tolerance. Lower the size or raise it
-          in settings.
+          {settings.slippagePct}% slippage tolerance.
         </p>
       ) : null}
       {overBalance ? (
-        <p className="mt-2 text-[12px] font-semibold text-down">
-          That is more than your {formatSolAmount(solBalance)} SOL balance.
+        <p className="text-[11px] font-semibold text-down">
+          More than your {formatSolAmount(solBalance)} SOL balance.
         </p>
       ) : null}
       {overPosition ? (
-        <p className="mt-2 text-[12px] font-semibold text-down">
+        <p className="text-[11px] font-semibold text-down">
           You only hold {formatTokenAmount(positionTokens)} {symbol}.
         </p>
       ) : null}
 
-      <form ref={formRef} action={formAction} onSubmit={handleSubmit} className="mt-4">
-        <input type="hidden" name="mint" value={mint} />
-        <input type="hidden" name="side" value={side} />
-        <input type="hidden" name="amount" value={validAmount ? amount : 0} />
-        <Button
-          type="submit"
-          variant={side === "buy" ? "buy" : "sell"}
-          size="lg"
-          className="w-full"
-          disabled={pending || confirming || blocked}
+      {loggedOut ? (
+        <Link
+          href={`/login?next=${encodeURIComponent(`/coin/${mint}`)}`}
+          className={buttonStyles({
+            variant: side === "buy" ? "buy" : "sell",
+            size: "md",
+            className: "w-full rounded-full",
+          })}
         >
-          {confirming
-            ? "Confirming…"
-            : pending
-              ? "Filling…"
-              : side === "buy"
-                ? `Buy ${symbol} with ${formatSolAmount(amount || 0)} SOL`
-                : `Sell ${formatTokenAmount(amount || 0)} ${symbol}`}
-        </Button>
-      </form>
+          Log in to trade
+        </Link>
+      ) : (
+        <form ref={formRef} action={formAction} onSubmit={handleSubmit}>
+          <input type="hidden" name="mint" value={mint} />
+          <input type="hidden" name="side" value={side} />
+          <input type="hidden" name="amount" value={validAmount ? amount : 0} />
+          <Button
+            type="submit"
+            variant={side === "buy" ? "buy" : "sell"}
+            size="md"
+            className="w-full rounded-full"
+            disabled={pending || confirming || blocked}
+          >
+            {confirming
+              ? "Confirming…"
+              : pending
+                ? "Filling…"
+                : side === "buy"
+                  ? `Buy ${symbol} · ${formatSolAmount(amount || 0)} SOL`
+                  : `Sell ${formatTokenAmount(amount || 0)} ${symbol}`}
+          </Button>
+        </form>
+      )}
 
-      {state.error ? <div className="mt-3"><FormError>{state.error}</FormError></div> : null}
+      {state.error ? <FormError>{state.error}</FormError> : null}
 
       {state.filled ? (
         <div
           role="status"
-          className="mt-3 rounded-[12px] border border-up/30 bg-up/10 px-3.5 py-3 text-[12px] font-medium text-up"
+          className="rounded-[6px] border border-up/30 bg-up/10 px-2.5 py-2 text-[11px] font-medium text-up"
         >
           {state.filled.side === "buy" ? "Bought" : "Sold"}{" "}
           {formatTokenAmount(state.filled.tokenAmount)} {state.filled.symbol} for{" "}
@@ -477,27 +556,23 @@ export function TradePanel({
         </div>
       ) : null}
 
-      <div className="mt-4 flex justify-center">
-        <PaperLabel />
-      </div>
+      {/* Account strip, where the reference shows margin and buying power. */}
+      <dl className="grid grid-cols-3 gap-1 rounded-[6px] border border-line bg-header p-1">
+        <StatCell label="Available" value={formatSolAmount(solBalance)} />
+        <StatCell label="Position" value={formatSolAmount(positionValueSol)} />
+        <StatCell
+          label="PnL"
+          value={
+            positionTokens > 0
+              ? `${formatPct(positionPnlPct, 1)}`
+              : "—"
+          }
+          tone={positionTokens > 0 ? toneForPnl(positionPnl) : "text-muted"}
+        />
+      </dl>
 
-      <div className="mt-4 border-t border-line pt-3.5">
-        <div className="flex items-center justify-between text-[12px]">
-          <span className="font-semibold text-muted">Your position</span>
-          <span className="num font-bold text-ink">
-            {formatTokenAmount(positionTokens)} {symbol}
-          </span>
-        </div>
-        <div className="mt-1.5 flex items-center justify-between text-[12px]">
-          <span className="text-muted">
-            {formatSolAmount(positionValueSol)} SOL value
-          </span>
-          <span className={cn("num font-semibold", toneForPnl(positionPnl))}>
-            {positionTokens > 0
-              ? `${formatPct(positionPnlPct, 1)} · ${formatSolAmount(Math.abs(positionPnl))} SOL`
-              : "—"}
-          </span>
-        </div>
+      <div className="flex justify-center">
+        <PaperLabel />
       </div>
 
       {settingsOpen ? (
@@ -521,11 +596,16 @@ function StatCell({
   tone?: string;
 }) {
   return (
-    <div className="rounded-[9px] bg-card px-2 py-1.5">
+    <div className="min-w-0 rounded-[5px] bg-card px-1.5 py-1">
       <dt className="text-[9px] font-bold uppercase tracking-wider text-muted">
         {label}
       </dt>
-      <dd className={cn("num mt-0.5 truncate text-[11px] font-bold", tone ?? "text-soft")}>
+      <dd
+        className={cn(
+          "num mt-0.5 truncate text-[11px] font-bold",
+          tone ?? "text-soft",
+        )}
+      >
         {value}
       </dd>
     </div>
