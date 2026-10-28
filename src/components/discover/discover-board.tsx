@@ -5,7 +5,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { EmptyState } from "@/components/empty-state";
 import { TokenRow, type TokenRowVariant } from "@/components/discover/token-row";
-import { Card, CardHeader } from "@/components/ui/card";
 import { useLivePrices } from "@/lib/market/live-prices";
 import type {
   DiscoverColumns,
@@ -57,44 +56,62 @@ const FILTERS: Array<{
   },
 ];
 
+type ColumnKey = keyof DiscoverColumns;
+
 const COLUMNS: Array<{
-  key: keyof DiscoverColumns;
+  key: ColumnKey;
   title: string;
-  subtitle: string;
+  /** Shown under the title in the column's own filter state. */
+  hint: string;
   variant: TokenRowVariant;
+  placeholder: string;
   emptyTitle: string;
   emptyDescription: string;
 }> = [
   {
     key: "launches",
-    title: "New launches",
-    subtitle: "Newest on the curve",
+    title: "New pairs",
+    hint: "Newest on the curve",
     variant: "launch",
+    placeholder: "Search by ticker or name",
     emptyTitle: "No launches right now",
     emptyDescription:
       "Every token that hits the pump.fun curve shows up here the moment it launches.",
   },
   {
     key: "graduating",
-    title: "About to graduate",
-    subtitle: "Closest to filling the curve",
+    title: "Final stretch",
+    hint: "Closest to filling the curve",
     variant: "graduating",
+    placeholder: "Search by ticker or name",
     emptyTitle: "No coins near graduation",
     emptyDescription:
       "The window between 40% and 100% of the bonding curve is where moves get violent.",
   },
   {
     key: "trending",
-    title: "Trending",
-    subtitle: "Graduated, ranked by flow",
+    title: "Migrated",
+    hint: "Graduated, ranked by flow",
     variant: "trending",
-    emptyTitle: "Nothing trending yet",
+    placeholder: "Search by ticker or name",
+    emptyTitle: "Nothing has migrated yet",
     emptyDescription:
       "Graduated coins ranked by the feed's trending score — mostly what just left the curve.",
   },
 ];
 
 type Status = "live" | "reconnecting";
+
+const EMPTY_QUERIES: Record<ColumnKey, string> = {
+  launches: "",
+  graduating: "",
+  trending: "",
+};
+
+/** Prefer the fresh column, but never let a failed fetch empty a populated one. */
+function keepIfEmpty(fresh: MarketToken[], current: MarketToken[]): MarketToken[] {
+  return fresh.length > 0 ? fresh : current;
+}
 
 function mintsOf(snapshot: DiscoverSnapshot): Set<string> {
   const { launches, graduating, trending } = snapshot.columns;
@@ -105,7 +122,7 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
   const router = useRouter();
   const [snapshot, setSnapshot] = useState(initial);
   const [status, setStatus] = useState<Status>("live");
-  const [query, setQuery] = useState("");
+  const [queries, setQueries] = useState<Record<ColumnKey, string>>(EMPTY_QUERIES);
   const [activeFilters, setActiveFilters] = useState<FilterId[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.parse(initial.generatedAt));
   // Coins that arrived in the latest refresh but are not on screen yet: they are
@@ -147,8 +164,24 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
         const next = (await response.json()) as DiscoverSnapshot;
         if (cancelled) return;
 
+        // A throttled upstream answers with empty columns. Replacing a good
+        // board with that would blank the page every time the market feed
+        // hiccups, so a column only shrinks to empty when the feed really has
+        // nothing: otherwise the last good rows stay on screen.
         setSnapshot((current) =>
-          next.generatedAt === current.generatedAt ? current : next,
+          next.generatedAt === current.generatedAt
+            ? current
+            : {
+                ...next,
+                columns: {
+                  launches: keepIfEmpty(next.columns.launches, current.columns.launches),
+                  graduating: keepIfEmpty(
+                    next.columns.graduating,
+                    current.columns.graduating,
+                  ),
+                  trending: keepIfEmpty(next.columns.trending, current.columns.trending),
+                },
+              },
         );
 
         const fresh = mintsOf(next);
@@ -161,7 +194,7 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
             [...current, ...newcomers].slice(0, MAX_QUEUE),
           );
         }
-        setStatus("live");
+        setStatus(next.degraded ? "reconnecting" : "live");
       } catch {
         if (!cancelled) setStatus("reconnecting");
       }
@@ -222,13 +255,17 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
     return () => window.clearTimeout(id);
   }, [queue]);
 
-  const trimmedQuery = query.trim();
-  const isMintQuery = MINT_PATTERN.test(trimmedQuery);
-  const filtering = activeFilters.length > 0 || trimmedQuery.length > 0;
+  const toggleFilter = (id: FilterId) => {
+    setActiveFilters((current) =>
+      current.includes(id)
+        ? current.filter((entry) => entry !== id)
+        : [...current, id],
+    );
+  };
 
+  // Each column filters itself: its own search box, plus the shared chips.
   const visible = useMemo(() => {
-    const needle = trimmedQuery.toLowerCase();
-    const match = (token: MarketToken) => {
+    const match = (token: MarketToken, needle: string) => {
       const matchesQuery =
         !needle ||
         token.symbol.toLowerCase().includes(needle) ||
@@ -241,72 +278,31 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
       });
     };
 
-    return {
-      launches: snapshot.columns.launches.filter(match),
-      graduating: snapshot.columns.graduating.filter(match),
-      trending: snapshot.columns.trending.filter(match),
-    } satisfies DiscoverColumns;
-  }, [snapshot, trimmedQuery, activeFilters, nowMs]);
+    const filterColumn = (key: ColumnKey) => {
+      const needle = queries[key].trim().toLowerCase();
+      return snapshot.columns[key].filter((token) => match(token, needle));
+    };
 
-  const toggleFilter = (id: FilterId) => {
-    setActiveFilters((current) =>
-      current.includes(id)
-        ? current.filter((entry) => entry !== id)
-        : [...current, id],
-    );
-  };
+    return {
+      launches: filterColumn("launches"),
+      graduating: filterColumn("graduating"),
+      trending: filterColumn("trending"),
+    } satisfies DiscoverColumns;
+  }, [snapshot, queries, activeFilters, nowMs]);
 
   // Coins waiting their turn: they stay off the board until released.
   const queued = useMemo(() => new Set(queue), [queue]);
 
-  const total = visible.launches.length + visible.graduating.length + visible.trending.length;
+  const total =
+    visible.launches.length +
+    visible.graduating.length +
+    visible.trending.length;
   const updated = formatAge(snapshot.generatedAt, nowMs);
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <form
-          role="search"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (isMintQuery) router.push(`/coin/${trimmedQuery}`);
-          }}
-          className="relative w-full lg:max-w-[420px]"
-        >
-          <svg
-            className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            aria-hidden
-          >
-            <circle cx="11" cy="11" r="7" />
-            <path d="m20 20-3.5-3.5" />
-          </svg>
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Name, ticker, or paste a contract address"
-            aria-label="Search tokens"
-            className={cn(
-              "h-11 w-full rounded-[12px] border border-line bg-card pl-10 text-[13px] text-ink placeholder:text-muted/70 focus:border-brand/60 focus:outline-none focus:ring-2 focus:ring-brand/20",
-              isMintQuery ? "pr-16" : "pr-3.5",
-            )}
-          />
-          {isMintQuery ? (
-            <button
-              type="submit"
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-[9px] bg-active px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wide text-soft transition-colors hover:bg-line-strong hover:text-ink"
-            >
-              Open
-            </button>
-          ) : null}
-        </form>
-
-        <div className="no-scrollbar -mx-6 flex gap-2 overflow-x-auto px-6 lg:mx-0 lg:px-0">
+    <div className="space-y-3">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <div className="no-scrollbar -mx-6 flex min-w-0 gap-1.5 overflow-x-auto px-6 lg:mx-0 lg:flex-1 lg:px-0">
           {FILTERS.map((filter) => {
             const active = activeFilters.includes(filter.id);
 
@@ -317,7 +313,7 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
                 aria-pressed={active}
                 onClick={() => toggleFilter(filter.id)}
                 className={cn(
-                  "inline-flex h-9 shrink-0 items-center rounded-full border px-3.5 text-[12px] font-semibold transition-colors",
+                  "inline-flex h-8 shrink-0 items-center rounded-full border px-3 text-[11px] font-semibold transition-colors",
                   active
                     ? "border-brand/40 bg-brand/12 text-link"
                     : "border-line bg-card text-soft hover:border-line-strong hover:bg-hover",
@@ -328,50 +324,93 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
             );
           })}
         </div>
+
+        <div className="flex shrink-0 items-center gap-3 text-[10px] font-bold uppercase tracking-wide">
+          <span className="inline-flex items-center gap-1.5 text-muted">
+            <span
+              aria-hidden
+              className={cn(
+                "size-1.5 rounded-full",
+                status === "live" ? "bg-up" : "bg-gold",
+              )}
+            />
+            {status === "live"
+              ? `Live · ${updated} ago`
+              : "Reconnecting"}
+          </span>
+          <span className="num text-muted/80">
+            {snapshot.solPriceUsd
+              ? `SOL $${snapshot.solPriceUsd.toFixed(2)} · `
+              : ""}
+            {total} coins
+          </span>
+        </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-wide">
-        <span className="inline-flex items-center gap-1.5 text-muted">
-          <span
-            aria-hidden
-            className={cn(
-              "size-1.5 rounded-full",
-              status === "live" ? "bg-up" : "bg-gold",
-            )}
-          />
-          {status === "live"
-            ? `Live · updated ${updated} ago`
-            : "Reconnecting to the feed"}
-        </span>
+      {/* One terminal panel, three columns, each with its own scroller. */}
+      <div className="overflow-hidden rounded-[14px] border border-line bg-card">
+        <div className="grid divide-y divide-line lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+          {COLUMNS.map((column) => {
+            const all = visible[column.key];
+            const rows = all.filter((token) => !queued.has(token.mint));
+            const needle = queries[column.key].trim();
+            const filtering = needle.length > 0 || activeFilters.length > 0;
+            const isMintQuery = MINT_PATTERN.test(needle);
 
-        <span className="num text-muted/80">
-          {snapshot.solPriceUsd
-            ? `SOL $${snapshot.solPriceUsd.toFixed(2)} · `
-            : ""}
-          {total} coins
-        </span>
-      </div>
+            return (
+              <section
+                key={column.key}
+                className="flex min-w-0 flex-col"
+              >
+                <header className="flex items-center gap-2 border-b border-line bg-header px-2.5 py-2">
+                  <div className="min-w-0 shrink-0">
+                    <h2 className="text-[12px] font-bold uppercase tracking-wide text-ink">
+                      {column.title}
+                    </h2>
+                    <p className="num text-[9px] font-semibold text-muted/80">
+                      {rows.length} · {column.hint}
+                    </p>
+                  </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        {COLUMNS.map((column) => {
-          const all = visible[column.key];
-          const rows = all.filter((token) => !queued.has(token.mint));
+                  <form
+                    role="search"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      if (isMintQuery) router.push(`/coin/${needle}`);
+                    }}
+                    className="relative min-w-0 flex-1"
+                  >
+                    <svg
+                      className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      aria-hidden
+                    >
+                      <circle cx="11" cy="11" r="7" />
+                      <path d="m20 20-3.5-3.5" />
+                    </svg>
+                    <input
+                      type="search"
+                      value={queries[column.key]}
+                      onChange={(event) =>
+                        setQueries((current) => ({
+                          ...current,
+                          [column.key]: event.target.value,
+                        }))
+                      }
+                      placeholder={column.placeholder}
+                      aria-label={`Search ${column.title}`}
+                      className="h-7 w-full rounded-[7px] border border-line bg-bg pl-7 pr-2 text-[11px] text-ink placeholder:text-muted/60 focus:border-brand/60 focus:outline-none focus:ring-1 focus:ring-brand/25"
+                    />
+                  </form>
+                </header>
 
-          return (
-            <Card key={column.key} className="flex min-w-0 flex-col">
-              <CardHeader
-                title={column.title}
-                subtitle={column.subtitle}
-                action={
-                  <span className="num text-[11px] font-bold text-muted">
-                    {rows.length}
-                  </span>
-                }
-              />
-              <div className="flex flex-1 flex-col p-2">
-                {all.length > 0 ? (
-                  <div className="divide-y divide-line/60">
-                    {rows.map((token, index) => (
+                <div className="board-column min-h-0 space-y-1 overflow-y-auto p-1.5">
+                  {all.length > 0 ? (
+                    rows.map((token, index) => (
                       <TokenRow
                         key={token.mint}
                         token={token}
@@ -381,39 +420,39 @@ export function DiscoverBoard({ initial }: { initial: DiscoverSnapshot }) {
                         isNew={arrived.has(token.mint)}
                         enterDelayMs={index * 26}
                       />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="flex flex-1 p-2">
-                    <EmptyState
-                      className="flex-1"
-                      title={
-                        filtering
-                          ? "No coins match"
-                          : snapshot.degraded
-                            ? "Feed unavailable"
-                            : column.emptyTitle
-                      }
-                      description={
-                        filtering
-                          ? "Clear a filter or the search to see the full board."
-                          : snapshot.degraded
-                            ? "The market feed didn't answer. The board retries every 15 seconds."
-                            : column.emptyDescription
-                      }
-                    />
-                  </div>
-                )}
-              </div>
-            </Card>
-          );
-        })}
+                    ))
+                  ) : (
+                    <div className="flex h-full p-2">
+                      <EmptyState
+                        className="flex-1"
+                        title={
+                          filtering
+                            ? "No coins match"
+                            : snapshot.degraded
+                              ? "Feed unavailable"
+                              : column.emptyTitle
+                        }
+                        description={
+                          filtering
+                            ? "Clear the search or a filter to see the full board."
+                            : snapshot.degraded
+                              ? "The market feed didn't answer. The board retries in a few seconds."
+                              : column.emptyDescription
+                        }
+                      />
+                    </div>
+                  )}
+                </div>
+              </section>
+            );
+          })}
+        </div>
       </div>
 
       <p className="text-[11px] text-muted/70">
-        Prices and curve progress come from the live Solana market. Curve % is an
-        estimate from FDV and the current SOL price — exact fills land in the
-        trading engine.
+        Prices, market caps and volumes come from the live Solana market and
+        refresh in place every second. Curve % is an estimate from FDV and the
+        current SOL price — exact fills land in the trading engine.
       </p>
     </div>
   );
