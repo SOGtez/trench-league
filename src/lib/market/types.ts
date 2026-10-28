@@ -19,6 +19,8 @@ export type MarketToken = {
   volume24hUsd: number | null;
   change1hPct: number | null;
   change24hPct: number | null;
+  /** Five-minute move — the fastest number the pool feed reports. */
+  change5mPct: number | null;
   buys1h: number;
   sells1h: number;
   /** 0–100 for tokens still on the pump.fun bonding curve, else null. */
