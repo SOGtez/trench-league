@@ -132,3 +132,15 @@
     display: none;
   }
 }
+
+/*
+ * A Discover column's scroller: on wide screens it takes the height left over
+ * below the header, toolbar and column title, so the three lists scroll inside
+ * the page instead of stretching it. Stacked layouts keep natural height.
+ * Plain CSS because Tailwind does not generate an arbitrary calc() for this.
+ */
+@media (width >= 64rem) {
+  .board-column {
+    height: calc(100vh - 27rem);
+  }
+}

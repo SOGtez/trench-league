@@ -24,11 +24,14 @@ export function TokenAvatar({
   mint,
   symbol,
   logoUrl,
+  square = false,
   className,
 }: {
   mint: string;
   symbol: string;
   logoUrl?: string | null;
+  /** Rounded tile instead of a circle — the dense board rows use this. */
+  square?: boolean;
   className?: string;
 }) {
   const [failed, setFailed] = useState(false);
@@ -41,7 +44,8 @@ export function TokenAvatar({
     <span
       aria-hidden
       className={cn(
-        "relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-full text-[10px] font-bold uppercase tracking-wide text-white/90 ring-1 ring-inset ring-white/10",
+        "relative grid size-8 shrink-0 place-items-center overflow-hidden text-[10px] font-bold uppercase tracking-wide text-white/90 ring-1 ring-inset ring-white/10",
+        square ? "rounded-[9px]" : "rounded-full",
         className,
       )}
       style={{
