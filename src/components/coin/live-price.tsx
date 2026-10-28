@@ -16,10 +16,13 @@ export function LivePrice({
   mint,
   initialPriceUsd,
   initialChange1hPct,
+  variant = "block",
 }: {
   mint: string;
   initialPriceUsd: number | null;
   initialChange1hPct: number | null;
+  /** "inline" fits the terminal's instrument strip; "block" is the old stack. */
+  variant?: "block" | "inline";
 }) {
   const tick = useLivePrices([mint])[mint];
   const priceUsd = tick?.priceUsd ?? initialPriceUsd;
@@ -37,6 +40,36 @@ export function LivePrice({
     const id = window.setTimeout(() => setFlash(null), 420);
     return () => window.clearTimeout(id);
   }, [priceUsd]);
+
+  if (variant === "inline") {
+    return (
+      <div
+        className="num flex items-baseline gap-1.5"
+        title="Live price · 1h change"
+      >
+        <span
+          className={cn(
+            "text-[13px] font-bold leading-none transition-colors duration-300",
+            flash === "up"
+              ? "text-up"
+              : flash === "down"
+                ? "text-down"
+                : "text-ink",
+          )}
+        >
+          {formatUsdPrice(priceUsd)}
+        </span>
+        <span
+          className={cn(
+            "text-[10px] font-semibold leading-none",
+            toneForPnl(change1hPct),
+          )}
+        >
+          {formatPct(change1hPct)}
+        </span>
+      </div>
+    );
+  }
 
   return (
     <>
